@@ -4,7 +4,6 @@ This repository is a work-in-progress rewrite of scripts for clustering, graphin
 
 An example project is provided in [`example.ipynb`](example.ipynb).
 
----
 ## Installation Instructions
 
 Activate your desired **conda environment**, then run:
