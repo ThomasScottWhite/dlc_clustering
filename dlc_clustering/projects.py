@@ -42,7 +42,13 @@ def populate_video_data(video_paths, dlc_h5_paths):
 
 class Project():
 
-    def __init__(self, project_name: str, project_path: str, data_processing_strategies=None, clustering_strategy=None):
+    def __init__(self, project_name: str, project_path: str, data_processing_strategies=None, clustering_strategy=None, output_path: str = None):
+
+        if output_path is None:
+            output_path = f"./output/{project_name}"
+        self.output_path = Path(output_path)
+        self.output_path.mkdir(parents=True, exist_ok=True)
+
         self.project_name = project_name
         self.project_path = project_path
         self.data_processing_strategies = data_processing_strategies if data_processing_strategies is not None else [KeepOriginalStrategy(include_likelihood=False)]
@@ -96,3 +102,33 @@ class Project():
             
             clustered_output = self.clustering_strategy.process(combined_data)
             video_data['clustering_output'] = clustered_output
+
+    def get_cluster_output(self, combined=True, drop_excess_rows=True):
+        """
+        Get the clustering output for each video data.
+
+        Parameters:
+        - combined: Whether to return a single concatenated DataFrame.
+        - drop_excess_rows: If True, drops rows with cluster == -1.
+        """
+        cluster_outputs = []
+        for video_data in self.video_data:
+            cluster_output = video_data["clustering_output"].clone()
+            cluster_output = cluster_output.with_columns(
+                pl.lit(Path(video_data["dlc_path"]).stem).alias("video_name")
+            )
+
+            if drop_excess_rows:
+                cluster_output = cluster_output.filter(pl.col("cluster") != -1)
+
+            cluster_outputs.append(cluster_output)
+
+        if combined:
+            return pl.concat(cluster_outputs, how="vertical")
+        return cluster_outputs
+
+    def is_using_data_processing_strategy(self, strategy_type) -> bool:
+        """
+        Check if the project is using a specific data processing strategy.
+        """
+        return any(isinstance(s, strategy_type) for s in self.data_processing_strategies)
