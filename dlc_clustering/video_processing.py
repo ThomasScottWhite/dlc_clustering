@@ -86,7 +86,7 @@ def render_cluster_videos(project: Project):
     for video in project.video_data:
         clustering_output = video["clustering_output"]
         video_path = video["video_path"]
-        output_path = project.output_path / "videos" / f"{video["video_name"]}" / f"{video["video_name"]}.avi"
+        output_path = project.output_path / "videos" / f"{video['video_name']}" / f"{video['video_name']}.avi"
         output_path.parent.mkdir(parents=True, exist_ok=True)
         # overlay_cluster_text(video_path, clustering_output, output_path)
         if video_path and clustering_output is not None:
