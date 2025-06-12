@@ -2,6 +2,7 @@ import pandas as pd
 import polars as pl
 import polars as pl
 from dataclasses import dataclass
+from typing import Protocol
 
 def read_hdf(csv_path: str) -> pd.DataFrame:
     """
@@ -15,6 +16,21 @@ def read_hdf(csv_path: str) -> pd.DataFrame:
     df.columns = ['_'.join(col).strip() for col in df.columns.values]
     df = pl.from_pandas(df)
     return df
+
+
+
+class DataProcessingStrategy(Protocol):
+    def process(self, df: pl.DataFrame) -> pl.DataFrame:
+        """
+        Process the input DataFrame and return a new DataFrame.
+        
+        Args:
+            df (pl.DataFrame): Input DataFrame to process.
+        
+        Returns:
+            pl.DataFrame: Processed DataFrame.
+        """
+        pass
 
 @dataclass
 class KeepOriginalStrategy:

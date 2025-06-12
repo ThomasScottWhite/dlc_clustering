@@ -3,6 +3,19 @@ import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from collections import defaultdict
+from typing import Protocol
+class ClusteringStrategy(Protocol):
+    def process(self, df: pl.DataFrame) -> pl.DataFrame:
+        """
+        Process the input DataFrame and return a clustered DataFrame.
+        
+        Parameters:
+        - df: Input DataFrame containing the data to be clustered.
+        
+        Returns:
+        - A DataFrame with clustering results.
+        """
+        pass
 
 class PCAKMeansBoutStrategy:
     def __init__(self, n_components: int = 2, n_clusters: int = 5, bout_length: int = 15, stride: int = 1):

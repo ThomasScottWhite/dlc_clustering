@@ -3,7 +3,12 @@ from dlc_clustering.clustering import PCAKMeansBoutStrategy
 from dlc_clustering.data_processing import CentroidDiffStrategy, VelocityStrategy
 import matplotlib.pyplot as plt
 import polars as pl
+import seaborn as sns
+import matplotlib.pyplot as plt
+from pathlib import Path
+import polars as pl
 import numpy as np
+
 def graph_combined_cluster_counts(project: Project):
     combined_df: pl.DataFrame = project.get_cluster_output()
     output_path = project.output_path / "graphs" / "cluster_counts"
@@ -183,6 +188,46 @@ def graph_video_specific_velocity(project: Project):
         filename = f"{video_name}.png"
         plt.savefig(output_path / filename)
         plt.close()
+
+
+def plot_cluster_heatmap(project : Project):
+    # Step 1: Aggregate cluster data across videos
+    output_path = project.output_path / "graphs" / "heatmaps"
+    output_path.mkdir(parents=True, exist_ok=True)
+    dfs = []
+    for video in project.video_data:
+        df: pl.DataFrame = video["clustering_output"]
+        df = df.select(["cluster", "bout_id"]).with_columns(
+            pl.lit(video["video_name"]).alias("video_name")
+        )
+        dfs.append(df)
+
+    # Step 2: Combine into a single DataFrame
+    df = pl.concat(dfs, how="vertical")
+
+    # Step 3: Pivot to create matrix for heatmap
+    pivoted = df.pivot(
+        values="cluster",
+        index="video_name",
+        columns="bout_id",
+        aggregate_function="first"  # assumes unique video_name-bout_id pairs
+    )
+
+    # Step 4: Optional – fill nulls (e.g., with -1)
+    pivoted = pivoted.fill_null(-1)
+
+    # Step 5: Convert to pandas and plot
+    df_pandas = pivoted.to_pandas().set_index("video_name")
+
+    plt.figure(figsize=(12, 6))
+    sns.heatmap(df_pandas, annot=False, fmt="d", cmap="viridis", cbar=True)
+    plt.title("Cluster Heatmap by Video and Bout")
+    plt.xlabel("Bout ID")
+    plt.ylabel("Video Name")
+    plt.tight_layout()
+    plt.savefig(output_path / "cluster_heatmap.png")
+    plt.close()
+
 def graph_all(project: Project):
     """
     Generate all graphs for the project.
@@ -192,3 +237,4 @@ def graph_all(project: Project):
     graph_cluster_specific_velocity(project)
     graph_video_cluster_specific_velocity(project)
     graph_video_specific_velocity(project)
+    plot_cluster_heatmap(project)
