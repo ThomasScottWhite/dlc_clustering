@@ -25,53 +25,69 @@ class PCAKMeansBoutStrategy:
         self.stride = stride
 
     def process(self, df: pl.DataFrame) -> pl.DataFrame:
-        X = df.to_numpy()
-        X = np.nan_to_num(X)
+        # Pipeline for clustering bouts in a DataFrame using PCA and KMeans
+        def get_filtered_mask(df: pl.DataFrame) -> np.ndarray:
+            filter_cols = [col for col in df.columns if col.endswith("_filter")]
+            if not filter_cols:
+                return np.zeros(len(df), dtype=bool)
+            return (
+                df.select(pl.any_horizontal([pl.col(col) for col in filter_cols]))
+                .to_series()
+                .to_numpy()
+            )
 
-        bouts = []
-        bout_to_frames = []  
+        def get_valid_bouts(X: np.ndarray, valid_indices: list[int], bout_length: int, stride: int):
+            bouts, bout_to_frames = [], []
+            for i in range(0, len(valid_indices) - bout_length + 1, stride):
+                frame_indices = valid_indices[i:i + bout_length]
+                bouts.append(X[frame_indices].flatten())
+                bout_to_frames.append(frame_indices)
+            return bouts, bout_to_frames
 
-        for start in range(0, len(X) - self.bout_length + 1, self.stride):
-            end = start + self.bout_length
-            bout = X[start:end].flatten()
-            bouts.append(bout)
-            bout_to_frames.append(list(range(start, end)))
+        def cluster_bouts(bouts: list[np.ndarray]):
+            if not bouts:
+                return [], []
+            X_bouts = np.stack(bouts)
+            bouts_pca = PCA(n_components=self.n_components).fit_transform(X_bouts)
+            labels = KMeans(n_clusters=self.n_clusters, n_init="auto").fit(bouts_pca).labels_
+            return labels, bouts
 
-        bouts = np.stack(bouts)
+        def assign_clusters_to_frames(n_frames, filtered_mask, bout_to_frames, labels):
+            cluster_map, bout_map = defaultdict(list), defaultdict(list)
+            for bout_id, (frames, label) in enumerate(zip(bout_to_frames, labels)):
+                for idx in frames:
+                    cluster_map[idx].append(label)
+                    bout_map[idx].append(bout_id)
 
-        # PCA
-        pca = PCA(n_components=self.n_components)
-        bouts_pca = pca.fit_transform(bouts)
+            cluster_per_frame, bout_id_per_frame = [], []
+            for i in range(n_frames):
+                if filtered_mask[i] or i not in cluster_map:
+                    cluster_per_frame.append(-1)
+                    bout_id_per_frame.append(-1)
+                else:
+                    cluster_per_frame.append(cluster_map[i][-1])
+                    bout_id_per_frame.append(bout_map[i][-1])
+            return cluster_per_frame, bout_id_per_frame
 
-        # KMeans
-        clusterer = KMeans(n_clusters=self.n_clusters, n_init="auto").fit(bouts_pca)
-        labels = clusterer.labels_
+        # === Pipeline ===
+        filtered_mask = get_filtered_mask(df)
 
-        # Frame-to-bout and cluster mapping
-        frame_cluster_map = defaultdict(list)
-        frame_bout_map = defaultdict(list)
+        usable_cols = [col for col in df.columns if not col.endswith("_filter")]
+        X = np.nan_to_num(df.select(usable_cols).to_numpy())
 
-        for bout_id, (frames, cluster_label) in enumerate(zip(bout_to_frames, labels)):
-            for frame_idx in frames:
-                frame_cluster_map[frame_idx].append(cluster_label)
-                frame_bout_map[frame_idx].append(bout_id)
+        valid_indices = [i for i, valid in enumerate(filtered_mask) if not valid]
+        bouts, bout_to_frames = get_valid_bouts(X, valid_indices, self.bout_length, self.stride)
+        labels, _ = cluster_bouts(bouts)
 
-        # Resolve each frame to last cluster and bout ID
-        n_frames = len(df)
-        cluster_per_frame = []
-        bout_id_per_frame = []
-
-        for i in range(n_frames):
-            if i in frame_cluster_map:
-                cluster_per_frame.append(frame_cluster_map[i][-1])  
-                bout_id_per_frame.append(frame_bout_map[i][-1])
-            else:
-                cluster_per_frame.append(-1)
-                bout_id_per_frame.append(-1)
+        cluster_per_frame, bout_id_per_frame = assign_clusters_to_frames(
+            n_frames=len(df),
+            filtered_mask=filtered_mask,
+            bout_to_frames=bout_to_frames,
+            labels=labels
+        )
 
         clustered_output = df.with_columns([
-            pl.Series(name="cluster", values=cluster_per_frame),
-            pl.Series(name="bout_id", values=bout_id_per_frame)
+            pl.Series("cluster", cluster_per_frame),
+            pl.Series("bout_id", bout_id_per_frame),
         ])
-
         return clustered_output

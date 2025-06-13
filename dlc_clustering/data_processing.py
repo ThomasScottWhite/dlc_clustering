@@ -78,7 +78,7 @@ class CentroidDiffStrategy:
 
         return df
 
-
+@dataclass
 class VelocityStrategy:
     def process(self, df: pl.DataFrame) -> pl.DataFrame:
         """Returns a DataFrame containing only the velocity (Euclidean) for each body part."""
@@ -113,3 +113,40 @@ class VelocityStrategy:
         df = df.fill_null(strategy="forward")
 
         return df
+    
+@dataclass
+class VelocityFilterStrategy:
+    percentile_threshold: float = 0.75
+
+    def process(self, df: pl.DataFrame) -> pl.DataFrame:
+        """Filters out rows where the velocity is below a certain threshold."""
+        body_parts = [col[:-2] for col in df.columns if col.endswith("_x")]
+
+        # Compute per-part velocity columns
+        velocity_exprs = []
+        for part in body_parts:
+            dx = pl.col(f"{part}_x").diff()
+            dy = pl.col(f"{part}_y").diff()
+
+            if f"{part}_z" in df.columns:
+                dz = pl.col(f"{part}_z").diff()
+                vel = ((dx**2 + dy**2 + dz**2).sqrt()).alias(f"{part}_velocity")
+            else:
+                vel = ((dx**2 + dy**2).sqrt()).alias(f"{part}_velocity")
+            
+            velocity_exprs.append(vel)
+
+        # Add velocity columns
+        df = df.with_columns(velocity_exprs)
+
+        # Compute row-wise mean velocity across all parts
+        velocity_cols = [f"{part}_velocity" for part in body_parts]
+        avg_velocity : pl.DataFrame = df.select(pl.mean_horizontal([pl.col(col) for col in velocity_cols]).alias("average_velocity"))
+
+
+        q3 = avg_velocity.select(pl.col("average_velocity").quantile(self.percentile_threshold, interpolation="nearest")).item()
+        mask = avg_velocity.select((pl.col("average_velocity") < q3).alias("avg_velocity_filter")).fill_null(False)
+
+        
+        return mask
+        
