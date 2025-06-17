@@ -99,6 +99,33 @@ class Project:
 
         self.video_data = populate_video_data(video_paths, dlc_h5_paths)
 
+    def exclude_columns(self, columns: List[str]) -> None:
+        """
+        Exclude specific columns from the original DLC data for all videos.
+
+        Parameters:
+        - columns: List of column names to exclude.
+        """
+        pattern = "|".join(columns)
+        for video_data in self.video_data:
+            video_data["original_dlc_data"] = video_data["original_dlc_data"].select(
+                pl.exclude("^.*(" + pattern + ").*$")
+            )
+
+    def include_columns(self, columns: List[str]) -> None:
+        """
+        Include only specific columns in the original DLC data for all videos,
+        matched by regex pattern.
+
+        Parameters:
+        - columns: List of substrings or regex patterns to match column names for inclusion.
+        """
+        pattern = "|".join(columns)  # e.g., "nose|jaw"
+        for video_data in self.video_data:
+            video_data["original_dlc_data"] = video_data["original_dlc_data"].select(
+                pl.col("^.*(" + pattern + ").*$")
+            )
+
     def process_data(self) -> None:
         """Process the DLC data using the defined strategies."""
         for video_data in self.video_data:
