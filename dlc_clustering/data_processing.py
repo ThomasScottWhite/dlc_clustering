@@ -150,3 +150,38 @@ class VelocityFilterStrategy:
         
         return mask
         
+
+@dataclass
+class PairwiseDistanceStrategy:
+    pairwise_list: list[list[str]]
+
+    def process(self, df: pl.DataFrame) -> pl.DataFrame:
+        """Finds the Euclidean distance for each keypoint pair in 2D or 3D if _z is present."""
+
+        distance_exprs = []
+
+        for pair in self.pairwise_list:
+            first_keypoint = pair[0]
+            second_keypoint = pair[1]
+
+            first_x = pl.col(f"{first_keypoint}_x")
+            first_y = pl.col(f"{first_keypoint}_y")
+            second_x = pl.col(f"{second_keypoint}_x")
+            second_y = pl.col(f"{second_keypoint}_y")
+
+            # Start with 2D distance
+            squared_diff = (first_x - second_x) ** 2 + (first_y - second_y) ** 2
+
+            # Add 3D distance if _z columns exist
+            z1_col = f"{first_keypoint}_z"
+            z2_col = f"{second_keypoint}_z"
+            if z1_col in df.columns and z2_col in df.columns:
+                first_z = pl.col(z1_col)
+                second_z = pl.col(z2_col)
+                squared_diff += (first_z - second_z) ** 2
+
+            distance = squared_diff.sqrt().alias(f"{first_keypoint}-{second_keypoint}_pairwise_distance")
+            distance_exprs.append(distance)
+
+        # Return only the distance columns
+        return df.select(distance_exprs)
