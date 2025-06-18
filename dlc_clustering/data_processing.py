@@ -1,8 +1,10 @@
 import pandas as pd
 import polars as pl
-import polars as pl
 from dataclasses import dataclass
 from typing import Protocol
+from typing import List
+import numpy as np
+from scipy.signal import spectrogram, savgol_filter
 
 def read_hdf(csv_path: str) -> pd.DataFrame:
     """
@@ -185,3 +187,74 @@ class PairwiseDistanceStrategy:
 
         # Return only the distance columns
         return df.select(distance_exprs)
+
+@dataclass
+class SpectrogramBoutStrategy:
+    keypoints: List[str]
+    fs: int = 30
+    segment_length: int = 15
+    num_overlap_samples: int = 10
+    bout_length: int = 15
+    stride: int = 1
+    smoothing: bool = True
+    smoothing_window_size: int = 7
+    smoothing_polynomial_order: int = 2
+
+    def process(self, df: pl.DataFrame) -> pl.DataFrame:
+        def get_bouts(n_frames: int) -> List[List[int]]:
+            return [
+                list(range(i, i + self.bout_length))
+                for i in range(0, n_frames - self.bout_length + 1, self.stride)
+            ]
+
+        frames_features = []
+        for frame_indices in get_bouts(len(df)):
+            bout = df[frame_indices]
+            feature_vector = []
+
+            for kp in self.keypoints:
+                for axis in ["x", "y"]:
+                    col = f"{kp}_{axis}"
+                    if col not in bout.columns:
+                        continue
+                    signal = bout[col].to_numpy()
+
+                    if self.smoothing and len(signal) >= self.smoothing_window_size:
+                        signal = savgol_filter(
+                            signal,
+                            window_length=self.smoothing_window_size,
+                            polyorder=self.smoothing_polynomial_order,
+                        )
+
+                    f, t, Sxx = spectrogram(
+                        signal,
+                        fs=self.fs,
+                        nperseg=self.segment_length,
+                        noverlap=self.num_overlap_samples,
+                    )
+                    Sxx_mean = Sxx.mean(axis=1)
+                    feature_vector.extend(Sxx_mean)
+
+            repeated = {
+                f"spectro_{i}": [val] * len(frame_indices) for i, val in enumerate(feature_vector)
+            }
+            repeated["frame_idx"] = frame_indices
+            frames_features.append(pl.DataFrame(repeated))
+
+        features_df = (
+            pl.concat(frames_features, how="vertical")
+            .sort("frame_idx")
+            .unique(subset="frame_idx", keep="last")
+        )
+
+        # Ensure full coverage and interpolate
+        full_frame_idx = pl.DataFrame({"frame_idx": list(range(len(df)))})
+        full_df = full_frame_idx.join(features_df, on="frame_idx", how="left")
+
+        return full_df.select([
+            pl.col("frame_idx"),
+            *[
+                pl.col(col).interpolate().fill_null(strategy="forward")
+                for col in full_df.columns if col.startswith("spectro_")
+            ]
+        ])
