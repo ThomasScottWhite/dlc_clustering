@@ -2,3 +2,4 @@
 /dlc_clustering.egg-info
 /output
 **.pyc
+*.ipynb

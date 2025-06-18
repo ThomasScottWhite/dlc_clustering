@@ -2,7 +2,7 @@
 
 This repository is a work-in-progress rewrite of scripts for clustering, graphing, and rendering DeepLabCut videos.
 
-An example project is provided in [`example.ipynb`](example.ipynb).
+An example project is provided in [`example.py`](example.ipynb).
 
 ## Installation Instructions
 
