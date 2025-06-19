@@ -2,7 +2,7 @@ from dlc_clustering.data_types import ProjectType, VideoData2D
 from dlc_clustering.data_processing import read_hdf, KeepOriginalStrategy
 from dlc_clustering.data_processing import DataProcessingStrategy
 from dlc_clustering.clustering import ClusteringStrategy        
-
+from polars import Float64, Float32
 from pathlib import Path
 from typing import List, Optional, Type
 import polars as pl
@@ -17,7 +17,11 @@ def convert_str_to_paths(video_paths: List[str]) -> List[Path]:
 
 def populate_video_data(video_paths, dlc_h5_paths):
     video_data = []
-    video_dir = video_paths[0].parent
+    if video_paths:
+        video_dir = video_paths[0].parent
+    else:
+        video_dir = Path("./this_directory_does_not_exist")
+
     h5_to_video_map = {}
     for dlc_h5_path in dlc_h5_paths:
         video_map_path = video_dir / (dlc_h5_path.stem + ".avi")
@@ -32,6 +36,13 @@ def populate_video_data(video_paths, dlc_h5_paths):
 
         original_dlc_data = read_hdf(str(delc_path))
         
+        # Force all Float64 columns to Float32
+        original_dlc_data = original_dlc_data.with_columns([
+            pl.col(col).cast(Float32) if dtype == Float64 else pl.col(col)
+            for col, dtype in zip(original_dlc_data.columns, original_dlc_data.dtypes)
+        ])
+
+
         video_data_2d = VideoData2D(
             video_name=delc_path.stem,
             video_path=str(video_path),
