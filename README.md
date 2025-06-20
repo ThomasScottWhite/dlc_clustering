@@ -39,6 +39,26 @@ example_project
 | `n_components` | Output dimensions                                       | Preserves more information        | More compressed representation        | 2–20          |
 | `metric`       | Distance function (`'euclidean'`, etc.)                 | Controls how neighbors are chosen | Can expose nonlinear structure        | -             |
 
+### t-SNE (Dimensionality Reduction)
+| Parameter                   | Default       | Description                                                                                 |
+|-----------------------------|---------------|---------------------------------------------------------------------------------------------|
+| **n_components**            | 2             | Dimension of the embedded space.                                                            |
+| **perplexity**              | 30.0          | The perplexity balances attention between local and global aspects; roughly the # of neighbors. |
+| **early_exaggeration**      | 12.0          | Controls tightness of natural clusters in early optimization.                               |
+| **learning_rate**           | `'warn'`      | Step size for optimization; a warning default selects an appropriate value automatically.   |
+| **n_iter**                  | 1000          | Maximum number of iterations for optimization.                                              |
+| **n_iter_without_progress** | 300           | Maximum iterations without progress before aborting.                                        |
+| **min_grad_norm**           | 1e-07         | If the gradient norm falls below this threshold, optimization is stopped early.             |
+| **metric**                  | `'euclidean'` | The metric to use when calculating distance between instances.                              |
+| **metric_params**           | `None`        | Additional keyword arguments for the metric function.                                       |
+| **init**                    | `'warn'`      | Initialization of embedding: `'random'`, `'pca'`, or a user-provided array (warns by default). |
+| **verbose**                 | 0             | Verbosity level: 0 (silent) or higher for more messages.                                    |
+| **random_state**            | `None`        | Seed or `RandomState` for reproducible results.                                             |
+| **method**                  | `'barnes_hut'`| Algorithm to use: `'barnes_hut'` (approximate, faster) or `'exact'` (slower, precise).      |
+| **angle**                   | 0.5           | Trade‐off parameter for Barnes-Hut: lower values give more accurate results at increased cost. |
+| **n_jobs**                  | `None`        | The number of parallel jobs to run for neighbors search (if applicable).                    |
+| **square_distances**        | `'deprecated'`| Deprecated parameter: distances are squared by default under the hood.                       |
+
 ### HDBSCAN (Clustering)
 
 | Parameter                   | Description                                       | Higher Value                       | Lower Value                           | Typical Range   |
@@ -47,6 +67,7 @@ example_project
 | `min_samples`              | Min density in core neighborhood                  | Tighter clusters                   | Looser clusters, more outliers         | 5–100           |
 | `cluster_selection_method` | `'eom'` (default) or `'leaf'`                     | Coarser, broader clusters          | More granular splits                   | `'eom'`, `'leaf'`|
 | `cluster_selection_epsilon`| Distance threshold for merging nearby clusters    | Merges clusters                    | Keeps them separate                    | 0.0–0.5         |
+
 
 ### Recommended Starting Point for Behavioral Clustering
 
@@ -63,3 +84,4 @@ hdbscan_args = {
     "min_samples": 50,
     "cluster_selection_method": "eom"
 }
+
