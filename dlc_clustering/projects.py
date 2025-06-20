@@ -199,3 +199,20 @@ class Project:
     def is_using_data_processing_strategy(self, strategy_type: Type) -> bool:
         """Check if the project is using a specific data processing strategy type."""
         return any(isinstance(s, strategy_type) for s in self.data_processing_strategies)
+    
+    def save_clustering_output(self, output_path: Optional[Path] = None) -> None:
+        """
+        Save the clustering output to a specified path or the project's output path.
+        """
+        output_path = Path(output_path) if output_path else None
+        if output_path is None:
+            output_path = self.output_path / "clustering_output"
+        output_path.mkdir(parents=True, exist_ok=True)
+
+        combined_df = self.get_cluster_output(combined=True)
+        Path(output_path / "csvs").mkdir(parents=True, exist_ok=True)
+        combined_df.write_csv(output_path / "csvs" / "clustering_output.csv")
+        
+        for unique_video_name in combined_df["video_name"].unique().to_list():
+            video_df = combined_df.filter(pl.col("video_name") == unique_video_name)
+            video_df.write_csv(output_path / "csvs" / f"{unique_video_name}_clustering_output.csv")
