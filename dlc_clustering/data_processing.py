@@ -6,6 +6,8 @@ from typing import List
 import numpy as np
 from scipy.signal import spectrogram, savgol_filter
 from scipy.signal import ShortTimeFFT
+from typing import List, Optional
+
 def read_hdf(csv_path: str) -> pd.DataFrame:
     """
     Reads an HDF5 file and processes the DataFrame.
@@ -154,7 +156,7 @@ class VelocityFilterStrategy:
         return mask
         
 @dataclass
-class LikelihoodPercentileFilterStrategy:
+class ConfidencePercentileFilterStrategy:
     percentile_threshold: float = 0.75
 
     def process(self, df: pl.DataFrame) -> pl.DataFrame:
@@ -181,7 +183,7 @@ class LikelihoodPercentileFilterStrategy:
         return mask
 
 @dataclass
-class LikelihoodThresholdFilterStrategy:
+class ConfidenceThresholdFilterStrategy:
     likelihood_threshold: float = 0.75 
 
     def process(self, df: pl.DataFrame) -> pl.DataFrame:
@@ -237,81 +239,6 @@ class PairwiseDistanceStrategy:
         # Return only the distance columns
         return df.select(distance_exprs)
 
-@dataclass
-class SpectrogramBoutStrategy:
-    keypoints: List[str]
-    fs: int = 30
-    segment_length: int = 15
-    num_overlap_samples: int = 10
-    bout_length: int = 15
-    stride: int = 1
-    smoothing: bool = True
-    smoothing_window_size: int = 7
-    smoothing_polynomial_order: int = 2
-
-    def process(self, df: pl.DataFrame) -> pl.DataFrame:
-        def get_bouts(n_frames: int) -> List[List[int]]:
-            return [
-                list(range(i, i + self.bout_length))
-                for i in range(0, n_frames - self.bout_length + 1, self.stride)
-            ]
-
-        frames_features = []
-        for frame_indices in get_bouts(len(df)):
-            bout = df[frame_indices]
-            feature_vector = []
-
-            for kp in self.keypoints:
-                for axis in ["x", "y"]:
-                    col = f"{kp}_{axis}"
-                    if col not in bout.columns:
-                        continue
-                    signal = bout[col].to_numpy()
-
-                    if self.smoothing and len(signal) >= self.smoothing_window_size:
-                        signal = savgol_filter(
-                            signal,
-                            window_length=self.smoothing_window_size,
-                            polyorder=self.smoothing_polynomial_order,
-                        )
-
-                    stfft = ShortTimeFFT.from_window(
-                        ('tukey', 0.25),
-                        fs=self.fs,
-                        nperseg=self.segment_length,
-                        noverlap=self.num_overlap_samples,
-                        fft_mode='onesided',
-                        scale_to='magnitude'
-                    )
-                    Sxx = stfft.spectrogram(signal, detr='constant')
-                    # Depending on your needs, either use Sxx directly (which is magnitude**2)
-                    # or convert: Sxx = np.sqrt(Sxx) to get linear magnitude.
-                    Sxx_mean = Sxx.mean(axis=1)
-                    feature_vector.extend(Sxx_mean)
-
-            repeated = {
-                f"spectro_{i}": [val] * len(frame_indices) for i, val in enumerate(feature_vector)
-            }
-            repeated["frame_idx"] = frame_indices
-            frames_features.append(pl.DataFrame(repeated))
-
-        features_df = (
-            pl.concat(frames_features, how="vertical")
-            .sort("frame_idx")
-            .unique(subset="frame_idx", keep="last")
-        )
-
-        # Ensure full coverage and interpolate
-        full_frame_idx = pl.DataFrame({"frame_idx": list(range(len(df)))})
-        full_df = full_frame_idx.join(features_df, on="frame_idx", how="left")
-
-        return full_df.select([
-            pl.col("frame_idx"),
-            *[
-                pl.col(col).interpolate().fill_null(strategy="forward")
-                for col in full_df.columns if col.startswith("spectro_")
-            ]
-        ])
     
 from dataclasses import dataclass
 import polars as pl
@@ -358,3 +285,131 @@ class AnglesStrategy:
             angle_exprs.append(angle_out)
 
         return df.select(angle_exprs)
+
+
+
+@dataclass
+class SpectrogramBoutStrategy:
+    keypoints: List[str]
+    fs: int = 30
+    segment_length: int = 15
+    num_overlap_samples: int = 10
+    bout_length: int = 15
+    stride: int = 1
+    smoothing: bool = True
+    smoothing_window_size: int = 7
+    smoothing_polynomial_order: int = 2
+    angles: Optional[List[List[str]]] = None  # Optional list of angles A-B-C
+
+    # This code is crazy and should be refactored
+    def process(self, df: pl.DataFrame) -> pl.DataFrame:
+        def get_bouts(n_frames: int) -> List[List[int]]:
+            return [
+                list(range(i, i + self.bout_length))
+                for i in range(0, n_frames - self.bout_length + 1, self.stride)
+            ]
+
+        def compute_angle_series(a, b, c, df: pl.DataFrame) -> np.ndarray:
+            # Create vectors BA and BC
+            ba = np.stack([
+                df[f"{a}_x"].to_numpy() - df[f"{b}_x"].to_numpy(),
+                df[f"{a}_y"].to_numpy() - df[f"{b}_y"].to_numpy()
+            ], axis=1)
+            bc = np.stack([
+                df[f"{c}_x"].to_numpy() - df[f"{b}_x"].to_numpy(),
+                df[f"{c}_y"].to_numpy() - df[f"{b}_y"].to_numpy()
+            ], axis=1)
+
+            if all(f"{pt}_z" in df.columns for pt in [a, b, c]):
+                ba = np.concatenate([ba, (df[f"{a}_z"].to_numpy() - df[f"{b}_z"].to_numpy())[:, None]], axis=1)
+                bc = np.concatenate([bc, (df[f"{c}_z"].to_numpy() - df[f"{b}_z"].to_numpy())[:, None]], axis=1)
+
+            dot = np.sum(ba * bc, axis=1)
+            norm_ba = np.linalg.norm(ba, axis=1)
+            norm_bc = np.linalg.norm(bc, axis=1)
+            cos_theta = np.clip(dot / (norm_ba * norm_bc), -1.0, 1.0)
+            angle_deg = np.arccos(cos_theta) * 180 / np.pi
+            return angle_deg
+
+        frames_features = []
+        for frame_indices in get_bouts(len(df)):
+            bout = df[frame_indices]
+            feature_vector = []
+
+            # Keypoint coordinate features
+            for kp in self.keypoints:
+                for axis in ["x", "y"]:
+                    col = f"{kp}_{axis}"
+                    if col not in bout.columns:
+                        continue
+                    signal = bout[col].to_numpy()
+
+                    if self.smoothing and len(signal) >= self.smoothing_window_size:
+                        signal = savgol_filter(
+                            signal,
+                            window_length=self.smoothing_window_size,
+                            polyorder=self.smoothing_polynomial_order,
+                        )
+
+                    stfft = ShortTimeFFT.from_window(
+                        ('tukey', 0.25),
+                        fs=self.fs,
+                        nperseg=self.segment_length,
+                        noverlap=self.num_overlap_samples,
+                        fft_mode='onesided',
+                        scale_to='magnitude'
+                    )
+                    Sxx = stfft.spectrogram(signal, detr='constant')
+                    Sxx_mean = Sxx.mean(axis=1)
+                    feature_vector.extend(Sxx_mean)
+
+            # Angle features
+            if self.angles:
+                for a, b, c in self.angles:
+                    if any(f"{pt}_x" not in bout.columns or f"{pt}_y" not in bout.columns for pt in [a, b, c]):
+                        continue
+                    signal = compute_angle_series(a, b, c, bout)
+
+                    if self.smoothing and len(signal) >= self.smoothing_window_size:
+                        signal = savgol_filter(
+                            signal,
+                            window_length=self.smoothing_window_size,
+                            polyorder=self.smoothing_polynomial_order,
+                        )
+
+                    stfft = ShortTimeFFT.from_window(
+                        ('tukey', 0.25),
+                        fs=self.fs,
+                        nperseg=self.segment_length,
+                        noverlap=self.num_overlap_samples,
+                        fft_mode='onesided',
+                        scale_to='magnitude'
+                    )
+                    Sxx = stfft.spectrogram(signal, detr='constant')
+                    Sxx_mean = Sxx.mean(axis=1)
+                    feature_vector.extend(Sxx_mean)
+
+            repeated = {
+                f"spectro_{i}": [val] * len(frame_indices) for i, val in enumerate(feature_vector)
+            }
+            repeated["frame_idx"] = frame_indices
+            frames_features.append(pl.DataFrame(repeated))
+
+        features_df = (
+            pl.concat(frames_features, how="vertical")
+            .sort("frame_idx")
+            .unique(subset="frame_idx", keep="last")
+        )
+
+        # Ensure full coverage and interpolate
+        full_frame_idx = pl.DataFrame({"frame_idx": list(range(len(df)))})
+        full_df = full_frame_idx.join(features_df, on="frame_idx", how="left")
+
+        # Maybe using polars was a mistake
+        return full_df.select([
+            pl.col("frame_idx"),
+            *[
+                pl.col(col).interpolate().fill_null(strategy="forward")
+                for col in full_df.columns if col.startswith("spectro_")
+            ]
+        ])
