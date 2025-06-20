@@ -200,7 +200,7 @@ class Project:
         """Check if the project is using a specific data processing strategy type."""
         return any(isinstance(s, strategy_type) for s in self.data_processing_strategies)
     
-    def save_clustering_output(self) -> None:
+    def save_clustering_output(self, drop_excess_rows=True) -> None:
         """
         Save the clustering output to CSV files in the output directory.
         The output will include a combined CSV file and individual CSV files for each video.
@@ -209,7 +209,7 @@ class Project:
         
         self.output_path.mkdir(parents=True, exist_ok=True)
 
-        combined_df = self.get_cluster_output(combined=True)
+        combined_df = self.get_cluster_output(combined=True, drop_excess_rows=drop_excess_rows)
         Path(self.output_path / "csvs").mkdir(parents=True, exist_ok=True)
         combined_df.write_csv(self.output_path / "csvs" / "clustering_output.csv")
         
