@@ -88,10 +88,10 @@ class PCAKMeansBoutStrategy:
             bout_to_frames=bout_to_frames,
             labels=labels
         )
-
+        
         clustered_output = df.with_columns([
-            pl.Series("cluster", cluster_per_frame),
-            pl.Series("bout_id", bout_id_per_frame),
+            pl.Series("cluster", np.array(cluster_per_frame, dtype=np.int32)),
+            pl.Series("bout_id", np.array(bout_id_per_frame, dtype=np.int32)),
         ])
         return clustered_output
 
@@ -179,7 +179,7 @@ class UmapHdbscanBoutStrategy:
         pl.Series("cluster", np.array(cluster_per_frame, dtype=np.int32)),
         pl.Series("bout_id", np.array(bout_id_per_frame, dtype=np.int32)),
     ])
-    
+
     return clustered_output
   
 class PCAHDBScanBoutStrategy:
@@ -259,7 +259,7 @@ class PCAHDBScanBoutStrategy:
     )
 
     clustered_output = df.with_columns([
-        pl.Series("cluster", cluster_per_frame),
-        pl.Series("bout_id", bout_id_per_frame),
+        pl.Series("cluster", np.array(cluster_per_frame, dtype=np.int32)),
+        pl.Series("bout_id", np.array(bout_id_per_frame, dtype=np.int32)),
     ])
     return clustered_output

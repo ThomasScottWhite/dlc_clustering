@@ -181,9 +181,14 @@ class Project:
 
         for video_data in self.video_data:
             cluster_output = video_data["clustering_output"].clone()
-            cluster_output = cluster_output.with_columns(
-                pl.lit(Path(video_data["dlc_path"]).stem).alias("video_name")
-            )
+
+            # Add video name and enforce i32 types
+            cluster_output = cluster_output.with_columns([
+                pl.lit(Path(video_data["dlc_path"]).stem).alias("video_name"),
+                pl.col("cluster").cast(pl.Int32),
+                pl.col("bout_id").cast(pl.Int32),
+            ])
+
             if drop_excess_rows:
                 cluster_output = cluster_output.filter(pl.col("cluster") != -1)
 

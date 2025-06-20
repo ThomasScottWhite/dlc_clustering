@@ -5,7 +5,7 @@ from typing import Protocol
 from typing import List
 import numpy as np
 from scipy.signal import spectrogram, savgol_filter
-
+from scipy.signal import ShortTimeFFT
 def read_hdf(csv_path: str) -> pd.DataFrame:
     """
     Reads an HDF5 file and processes the DataFrame.
@@ -118,6 +118,7 @@ class VelocityStrategy:
     
 @dataclass
 class VelocityFilterStrategy:
+    # TODO Make this work on 3d videos
     percentile_threshold: float = 0.75
 
     def process(self, df: pl.DataFrame) -> pl.DataFrame:
@@ -152,7 +153,55 @@ class VelocityFilterStrategy:
         
         return mask
         
+@dataclass
+class LikelihoodPercentileFilterStrategy:
+    percentile_threshold: float = 0.75
 
+    def process(self, df: pl.DataFrame) -> pl.DataFrame:
+        """Filters out rows where the average likelihood is below the specified percentile threshold."""
+
+        # Extract all likelihood columns
+        likelihood_cols = [col for col in df.columns if col.endswith("_likelihood")]
+
+        # Compute row-wise mean likelihood
+        avg_likelihood = df.select(
+            pl.mean_horizontal([pl.col(col) for col in likelihood_cols]).alias("average_likelihood")
+        )
+
+        # Calculate threshold based on the specified percentile
+        q_threshold = avg_likelihood.select(
+            pl.col("average_likelihood").quantile(self.percentile_threshold, interpolation="nearest")
+        ).item()
+
+        # Generate boolean mask: True if likelihood is above or equal to threshold
+        mask = avg_likelihood.select(
+            (pl.col("average_likelihood") >= q_threshold).alias("percentile_likelihood_filter")
+        ).fill_null(False)
+
+        return mask
+
+@dataclass
+class LikelihoodThresholdFilterStrategy:
+    likelihood_threshold: float = 0.75 
+
+    def process(self, df: pl.DataFrame) -> pl.DataFrame:
+        """Filters out rows where the average likelihood is below the specified fixed threshold."""
+
+        # Extract all likelihood columns
+        likelihood_cols = [col for col in df.columns if col.endswith("_likelihood")]
+
+        # Compute row-wise mean likelihood
+        avg_likelihood = df.select(
+            pl.mean_horizontal([pl.col(col) for col in likelihood_cols]).alias("average_likelihood")
+        )
+
+        # Generate boolean mask: True if average likelihood is >= threshold
+        mask = avg_likelihood.select(
+            (pl.col("average_likelihood") >= self.likelihood_threshold).alias("threshold_likelihood_filter")
+        ).fill_null(False)
+
+        return mask
+    
 @dataclass
 class PairwiseDistanceStrategy:
     pairwise_list: list[list[str]]
@@ -226,12 +275,17 @@ class SpectrogramBoutStrategy:
                             polyorder=self.smoothing_polynomial_order,
                         )
 
-                    f, t, Sxx = spectrogram(
-                        signal,
+                    stfft = ShortTimeFFT.from_window(
+                        ('tukey', 0.25),
                         fs=self.fs,
                         nperseg=self.segment_length,
                         noverlap=self.num_overlap_samples,
+                        fft_mode='onesided',
+                        scale_to='magnitude'
                     )
+                    Sxx = stfft.spectrogram(signal, detr='constant')
+                    # Depending on your needs, either use Sxx directly (which is magnitude**2)
+                    # or convert: Sxx = np.sqrt(Sxx) to get linear magnitude.
                     Sxx_mean = Sxx.mean(axis=1)
                     feature_vector.extend(Sxx_mean)
 
@@ -258,3 +312,49 @@ class SpectrogramBoutStrategy:
                 for col in full_df.columns if col.startswith("spectro_")
             ]
         ])
+    
+from dataclasses import dataclass
+import polars as pl
+import numpy as np
+
+@dataclass
+class AnglesStrategy:
+    angles_list: list[list[str]]
+    normalize: bool = True  # If True, normalize angle to [0, 1]
+
+    def process(self, df: pl.DataFrame) -> pl.DataFrame:
+        angle_exprs = []
+
+        for triplet in self.angles_list:
+            a, b, c = triplet  # Points A-B-C, where B is the vertex
+
+            # Vectors BA and BC
+            vec_ba_x = pl.col(f"{a}_x") - pl.col(f"{b}_x")
+            vec_ba_y = pl.col(f"{a}_y") - pl.col(f"{b}_y")
+            vec_bc_x = pl.col(f"{c}_x") - pl.col(f"{b}_x")
+            vec_bc_y = pl.col(f"{c}_y") - pl.col(f"{b}_y")
+
+            dot_product = vec_ba_x * vec_bc_x + vec_ba_y * vec_bc_y
+            norm_ba = (vec_ba_x ** 2 + vec_ba_y ** 2).sqrt()
+            norm_bc = (vec_bc_x ** 2 + vec_bc_y ** 2).sqrt()
+
+            # 3D support
+            if all(f"{pt}_z" in df.columns for pt in triplet):
+                vec_ba_z = pl.col(f"{a}_z") - pl.col(f"{b}_z")
+                vec_bc_z = pl.col(f"{c}_z") - pl.col(f"{b}_z")
+                dot_product += vec_ba_z * vec_bc_z
+                norm_ba = (norm_ba ** 2 + vec_ba_z ** 2).sqrt()
+                norm_bc = (norm_bc ** 2 + vec_bc_z ** 2).sqrt()
+
+            cos_theta = (dot_product / (norm_ba * norm_bc)).clip(-1.0, 1.0)
+            angle_rad = cos_theta.arccos()
+            angle_deg = angle_rad * 180 / np.pi
+
+            if self.normalize:
+                angle_out = (angle_deg / 180).alias(f"{a}-{b}-{c}_angle_norm")
+            else:
+                angle_out = angle_deg.alias(f"{a}-{b}-{c}_angle_deg")
+
+            angle_exprs.append(angle_out)
+
+        return df.select(angle_exprs)
