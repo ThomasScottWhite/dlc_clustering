@@ -7,6 +7,10 @@ import numpy as np
 from scipy.signal import spectrogram, savgol_filter
 from scipy.signal import ShortTimeFFT
 from typing import List, Optional
+    
+from dataclasses import dataclass
+import polars as pl
+import numpy as np
 
 def read_hdf(csv_path: str) -> pd.DataFrame:
     """
@@ -239,10 +243,7 @@ class PairwiseDistanceStrategy:
         # Return only the distance columns
         return df.select(distance_exprs)
 
-    
-from dataclasses import dataclass
-import polars as pl
-import numpy as np
+
 
 @dataclass
 class AnglesStrategy:
@@ -251,38 +252,32 @@ class AnglesStrategy:
 
     def process(self, df: pl.DataFrame) -> pl.DataFrame:
         angle_exprs = []
+        epsilon = 1e-6  # avoid division by zero
 
-        for triplet in self.angles_list:
-            a, b, c = triplet  # Points A-B-C, where B is the vertex
+        for a, b, c in self.angles_list:
+            # Vector BA
+            ba_x = pl.col(f"{a}_x") - pl.col(f"{b}_x")
+            ba_y = pl.col(f"{a}_y") - pl.col(f"{b}_y")
 
-            # Vectors BA and BC
-            vec_ba_x = pl.col(f"{a}_x") - pl.col(f"{b}_x")
-            vec_ba_y = pl.col(f"{a}_y") - pl.col(f"{b}_y")
-            vec_bc_x = pl.col(f"{c}_x") - pl.col(f"{b}_x")
-            vec_bc_y = pl.col(f"{c}_y") - pl.col(f"{b}_y")
+            # Vector BC
+            bc_x = pl.col(f"{c}_x") - pl.col(f"{b}_x")
+            bc_y = pl.col(f"{c}_y") - pl.col(f"{b}_y")
 
-            dot_product = vec_ba_x * vec_bc_x + vec_ba_y * vec_bc_y
-            norm_ba = (vec_ba_x ** 2 + vec_ba_y ** 2).sqrt()
-            norm_bc = (vec_bc_x ** 2 + vec_bc_y ** 2).sqrt()
+            # Dot product and norms
+            dot = ba_x * bc_x + ba_y * bc_y
+            norm_ba = (ba_x ** 2 + ba_y ** 2).sqrt()
+            norm_bc = (bc_x ** 2 + bc_y ** 2).sqrt()
 
-            # 3D support
-            if all(f"{pt}_z" in df.columns for pt in triplet):
-                vec_ba_z = pl.col(f"{a}_z") - pl.col(f"{b}_z")
-                vec_bc_z = pl.col(f"{c}_z") - pl.col(f"{b}_z")
-                dot_product += vec_ba_z * vec_bc_z
-                norm_ba = (norm_ba ** 2 + vec_ba_z ** 2).sqrt()
-                norm_bc = (norm_bc ** 2 + vec_bc_z ** 2).sqrt()
-
-            cos_theta = (dot_product / (norm_ba * norm_bc)).clip(-1.0, 1.0)
+            # Cosine of angle
+            cos_theta = (dot / (norm_ba * norm_bc + epsilon)).clip(-1, 1)
             angle_rad = cos_theta.arccos()
-            angle_deg = angle_rad * 180 / np.pi
 
-            if self.normalize:
-                angle_out = (angle_deg / 180).alias(f"{a}-{b}-{c}_angle_norm")
-            else:
-                angle_out = angle_deg.alias(f"{a}-{b}-{c}_angle_deg")
-
-            angle_exprs.append(angle_out)
+            angle_col_name = f"angle_{a}_{b}_{c}"
+            angle_expr = (
+                (angle_rad / np.pi if self.normalize else angle_rad)
+                .alias(angle_col_name)
+            )
+            angle_exprs.append(angle_expr)
 
         return df.select(angle_exprs)
 
