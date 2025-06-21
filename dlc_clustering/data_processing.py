@@ -12,20 +12,6 @@ from dataclasses import dataclass
 import polars as pl
 import numpy as np
 
-def read_hdf(csv_path: str) -> pd.DataFrame:
-    """
-    Reads an HDF5 file and processes the DataFrame.
-    
-    Returns:
-        pd.DataFrame: Processed DataFrame with multi-level columns flattened.
-    """
-    df = pd.read_hdf(csv_path)
-    df.columns = df.columns.droplevel(0)
-    df.columns = ['_'.join(col).strip() for col in df.columns.values]
-    df = pl.from_pandas(df)
-    return df
-
-
 
 class DataProcessingStrategy(Protocol):
     def process(self, df: pl.DataFrame) -> pl.DataFrame:

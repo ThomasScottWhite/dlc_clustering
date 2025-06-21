@@ -1,13 +1,31 @@
 from dlc_clustering.data_types import ProjectType, VideoData2D
-from dlc_clustering.data_processing import read_hdf, KeepOriginalStrategy
+from dlc_clustering.data_processing import KeepOriginalStrategy
 from dlc_clustering.data_processing import DataProcessingStrategy
-from dlc_clustering.clustering import ClusteringStrategy        
+from dlc_clustering.clustering import ClusteringStrategy   
+
 from polars import Float64, Float32
 from pathlib import Path
 from typing import List, Optional, Type
 import polars as pl
 import glob
 import warnings
+from dlc_clustering.clustering import PCAKMeansBoutStrategy
+import pandas as pd
+
+
+def read_hdf(csv_path: str) -> pl.DataFrame:
+    """
+    Reads an HDF5 file and processes the DataFrame.
+    
+    Returns:
+        pd.DataFrame: Processed DataFrame with multi-level columns flattened.
+    """
+    df = pd.read_hdf(csv_path)
+    df.columns = df.columns.droplevel(0)
+    df.columns = ['_'.join(col).strip() for col in df.columns.values]
+    df = pl.from_pandas(df)
+    return df
+
 
 def convert_str_to_paths(video_paths: List[str]) -> List[Path]:
     """
@@ -15,46 +33,66 @@ def convert_str_to_paths(video_paths: List[str]) -> List[Path]:
     """
     return [Path(path) for path in video_paths]
 
-def populate_video_data(video_paths, dlc_h5_paths):
+def populate_video_data(project_path: str) -> List[VideoData2D]:
+    project_path = Path(project_path)
+    if not project_path.exists():
+        raise ValueError(f"Project path {project_path} does not exist. Please provide a valid path.")
+
+    def get_paths(subdir: str, pattern: str, required: bool = True) -> List[Path]:
+        paths = convert_str_to_paths(glob.glob(str(project_path / subdir / pattern)))
+        if not paths and required:
+            raise ValueError(f"No files matching '{pattern}' found in {project_path / subdir}")
+        if not paths and not required:
+            warnings.warn(f"No files found in {project_path / subdir}. Ignore if intentional.")
+        return paths
+
+    dlc_h5_paths = get_paths("dlc_data", "*.h5", required=True)
+    video_paths = get_paths("videos", "*.avi", required=False)
+    time_series_paths = get_paths("time_series", "*.csv", required=False)
+
+    video_dir = Path(project_path / "videos")
+    time_series_dir = Path(project_path / "time_series")
+
     video_data = []
-    if video_paths:
-        video_dir = video_paths[0].parent
-    else:
-        video_dir = Path("./this_directory_does_not_exist")
-
-    h5_to_video_map = {}
-    for dlc_h5_path in dlc_h5_paths:
-        video_map_path = video_dir / (dlc_h5_path.stem + ".avi")
-        h5_to_video_map[dlc_h5_path] = video_map_path
 
 
-    for delc_path in h5_to_video_map.keys():
-        video_path = h5_to_video_map[delc_path]
-        if not video_path.exists():
-            warnings.warn(f"Video file {video_path} does not exist for DLC data {delc_path}. Ignore if you have done this intentionally.")
-            video_path = None
+    for dlc_path in dlc_h5_paths:
 
-        original_dlc_data = read_hdf(str(delc_path))
+        video_path = None
+        time_series_path = None
         
-        # Force all Float64 columns to Float32
-        original_dlc_data = original_dlc_data.with_columns([
+        # Verifies if video_paths exist and matches the DLC file name
+        if video_paths:
+            video_path = video_dir / f"{dlc_path.stem}.avi"
+            if not video_path.exists():
+                warnings.warn(f"Video file {video_path} does not exist for DLC data {dlc_path}. Ignoring.")
+                video_path = None
+
+        if time_series_paths:
+            time_series_path = time_series_dir / f"{dlc_path.stem}.avi"
+            if not video_path.exists():
+                warnings.warn(f"Video file {video_path} does not exist for DLC data {dlc_path}. Ignoring.")
+                video_path = None
+
+        # Read the DLC data from the HDF5 file and force float32 for compatibility
+        dlc_data = read_hdf(str(dlc_path))
+
+        dlc_data = dlc_data.with_columns([
             pl.col(col).cast(Float32) if dtype == Float64 else pl.col(col)
-            for col, dtype in zip(original_dlc_data.columns, original_dlc_data.dtypes)
+            for col, dtype in zip(dlc_data.columns, dlc_data.dtypes)
         ])
-
-
-        video_data_2d = VideoData2D(
-            video_name=delc_path.stem,
+        time_series_data = pl.read_csv(str(time_series_path)) if time_series_path else None
+        
+        video_data.append(VideoData2D(
+            video_name=dlc_path.stem,
             video_path=str(video_path),
-            dlc_path=str(delc_path),
-            original_dlc_data=original_dlc_data,
+            dlc_path=str(dlc_path),
+            original_dlc_data=dlc_data,
+            time_series_data=time_series_data,
             processed_dlc_data=[]
-        )
-    
-        video_data.append(video_data_2d)
+        ))
 
     return video_data
-
 
 class Project:
     project_name: str
@@ -69,8 +107,8 @@ class Project:
         self,
         project_name: str,
         project_path: str,
-        data_processing_strategies: Optional[List[DataProcessingStrategy]] = None,
-        clustering_strategy: Optional[ClusteringStrategy] = None,
+        data_processing_strategies: Optional[List[DataProcessingStrategy]] = [KeepOriginalStrategy(include_likelihood=False)],
+        clustering_strategy: Optional[ClusteringStrategy] = PCAKMeansBoutStrategy(n_components=2, n_clusters=5, bout_length=15, stride=1),
         output_path: Optional[str] = None,
     ):
         self.project_name = project_name
@@ -78,37 +116,10 @@ class Project:
         self.project_type = ProjectType.D2
         self.output_path = Path(output_path or f"./output/{project_name}")
         self.output_path.mkdir(parents=True, exist_ok=True)
-
-        self.data_processing_strategies = (
-            data_processing_strategies or [KeepOriginalStrategy(include_likelihood=False)]
-        )
-
-        if clustering_strategy is None:
-            from dlc_clustering.clustering import PCAKMeansBoutStrategy
-            clustering_strategy = PCAKMeansBoutStrategy(
-                n_components=2, n_clusters=5, bout_length=15, stride=1
-            )
-
         self.clustering_strategy = clustering_strategy
+        self.data_processing_strategies = data_processing_strategies
 
-        if not Path(project_path).exists():
-            raise ValueError(
-                f"Project path {project_path} does not exist. Please provide a valid path."
-            )
-
-        dlc_h5_paths = convert_str_to_paths(glob.glob(f"{project_path}/dlc_data/*.h5"))
-        if not dlc_h5_paths:
-            raise ValueError(
-                f"No DLC data found in {project_path}/dlc_data/. Please ensure the directory contains .h5 files."
-            )
-
-        video_paths = convert_str_to_paths(glob.glob(f"{project_path}/videos/*"))
-        if not video_paths:
-            warnings.warn(
-                f"No video files found in {project_path}/videos/. Ignore if you have done this intentionally."
-            )
-
-        self.video_data = populate_video_data(video_paths, dlc_h5_paths)
+        self.video_data = populate_video_data(project_path)
 
     def exclude_columns(self, columns: List[str]) -> None:
         """

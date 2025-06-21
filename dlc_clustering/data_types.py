@@ -17,9 +17,10 @@ class VideoData2D(TypedDict):
     video_path: str | None
     dlc_path: str
     original_dlc_data: pl.DataFrame
-    processed_dlc_data: List[DataProcessingOutput]  # safer for older Python
+    time_series_data: pl.DataFrame | None
+    processed_dlc_data: List[DataProcessingOutput] 
     combined_data: pl.DataFrame | None
-    clustering_output: pl.DataFrame | None  # rename for consistency
+    clustering_output: pl.DataFrame | None  
 class VideoData3D(TypedDict):
     video_paths: List[str]
     dlc_data: pl.DataFrame
