@@ -108,13 +108,20 @@ class VelocityStrategy:
 
         return df
     
+
 @dataclass
 class VelocityFilterStrategy:
-    # TODO Make this work on 3d videos
-    percentile_threshold: float = 0.75
+    percentile_threshold: Optional[float] = None
+    velocity_threshold: Optional[float] = None
 
     def process(self, df: pl.DataFrame) -> pl.DataFrame:
-        """Filters out rows where the velocity is below a certain threshold."""
+        """Filters out rows based on both percentile and fixed velocity thresholds.
+        Returns a mask where rows meet all specified velocity criteria.
+        """
+
+        if self.percentile_threshold is None and self.velocity_threshold is None:
+            raise ValueError("Either `percentile_threshold` or `velocity_threshold` must be set.")
+
         body_parts = [col[:-2] for col in df.columns if col.endswith("_x")]
 
         # Compute per-part velocity columns
@@ -128,72 +135,86 @@ class VelocityFilterStrategy:
                 vel = ((dx**2 + dy**2 + dz**2).sqrt()).alias(f"{part}_velocity")
             else:
                 vel = ((dx**2 + dy**2).sqrt()).alias(f"{part}_velocity")
-            
+
             velocity_exprs.append(vel)
 
         # Add velocity columns
         df = df.with_columns(velocity_exprs)
 
-        # Compute row-wise mean velocity across all parts
+        # Compute average velocity per frame
         velocity_cols = [f"{part}_velocity" for part in body_parts]
-        avg_velocity : pl.DataFrame = df.select(pl.mean_horizontal([pl.col(col) for col in velocity_cols]).alias("average_velocity"))
+        avg_velocity_df = df.select(
+            pl.mean_horizontal([pl.col(col) for col in velocity_cols]).alias("average_velocity")
+        )
 
+        # Start with all True
+        mask = pl.Series("velocity_filter", [True] * avg_velocity_df.height)
 
-        q3 = avg_velocity.select(pl.col("average_velocity").quantile(self.percentile_threshold, interpolation="nearest")).item()
-        mask = avg_velocity.select((pl.col("average_velocity") < q3).alias("avg_velocity_filter")).fill_null(False)
+        # Percentile-based filtering
+        if self.percentile_threshold is not None:
+            q = avg_velocity_df.select(
+                pl.col("average_velocity").quantile(self.percentile_threshold, interpolation="nearest")
+            ).item()
+
+            percentile_mask = avg_velocity_df.select(
+                (pl.col("average_velocity") >= q).alias("percentile_filter")
+            ).fill_null(False)
+
+            mask = mask & percentile_mask["percentile_filter"]
+
+        # Fixed-threshold filtering
+        if self.velocity_threshold is not None:
+            threshold_mask = avg_velocity_df.select(
+                (pl.col("average_velocity") >= self.velocity_threshold).alias("threshold_filter")
+            ).fill_null(False)
+
+            mask = mask & threshold_mask["threshold_filter"]
+
+        return pl.DataFrame({"velocity_filter": mask})
 
         
-        return mask
-        
+
 @dataclass
-class ConfidencePercentileFilterStrategy:
-    percentile_threshold: float = 0.75
+class ConfidenceFilterStrategy:
+    percentile_threshold: Optional[float] = None
+    likelihood_threshold: Optional[float] = None
 
     def process(self, df: pl.DataFrame) -> pl.DataFrame:
-        """Filters out rows where the average likelihood is below the specified percentile threshold."""
+        """Filters out rows based on both percentile and fixed likelihood threshold.
+        Returns a mask where rows meet all specified confidence criteria.
+        """
 
         # Extract all likelihood columns
         likelihood_cols = [col for col in df.columns if col.endswith("_likelihood")]
+        if not likelihood_cols:
+            raise ValueError("No likelihood columns found in DataFrame.")
 
         # Compute row-wise mean likelihood
-        avg_likelihood = df.select(
+        avg_likelihood_df = df.select(
             pl.mean_horizontal([pl.col(col) for col in likelihood_cols]).alias("average_likelihood")
         )
 
-        # Calculate threshold based on the specified percentile
-        q_threshold = avg_likelihood.select(
-            pl.col("average_likelihood").quantile(self.percentile_threshold, interpolation="nearest")
-        ).item()
+        mask = pl.Series("confidence_filter", [True] * avg_likelihood_df.height)
 
-        # Generate boolean mask: True if likelihood is above or equal to threshold
-        mask = avg_likelihood.select(
-            (pl.col("average_likelihood") >= q_threshold).alias("percentile_likelihood_filter")
-        ).fill_null(False)
+        if self.percentile_threshold is not None:
+            q_threshold = avg_likelihood_df.select(
+                pl.col("average_likelihood").quantile(self.percentile_threshold, interpolation="nearest")
+            ).item()
 
-        return mask
+            percentile_mask = avg_likelihood_df.select(
+                (pl.col("average_likelihood") >= q_threshold).alias("percentile_filter")
+            ).fill_null(False)
 
-@dataclass
-class ConfidenceThresholdFilterStrategy:
-    likelihood_threshold: float = 0.75 
+            mask = mask & percentile_mask["percentile_filter"]
 
-    def process(self, df: pl.DataFrame) -> pl.DataFrame:
-        """Filters out rows where the average likelihood is below the specified fixed threshold."""
+        if self.likelihood_threshold is not None:
+            threshold_mask = avg_likelihood_df.select(
+                (pl.col("average_likelihood") >= self.likelihood_threshold).alias("threshold_filter")
+            ).fill_null(False)
 
-        # Extract all likelihood columns
-        likelihood_cols = [col for col in df.columns if col.endswith("_likelihood")]
+            mask = mask & threshold_mask["threshold_filter"]
 
-        # Compute row-wise mean likelihood
-        avg_likelihood = df.select(
-            pl.mean_horizontal([pl.col(col) for col in likelihood_cols]).alias("average_likelihood")
-        )
-
-        # Generate boolean mask: True if average likelihood is >= threshold
-        mask = avg_likelihood.select(
-            (pl.col("average_likelihood") >= self.likelihood_threshold).alias("threshold_likelihood_filter")
-        ).fill_null(False)
-
-        return mask
-    
+        return pl.DataFrame({"confidence_filter": mask})    
 @dataclass
 class PairwiseDistanceStrategy:
     pairwise_list: list[list[str]]
