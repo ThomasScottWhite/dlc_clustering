@@ -69,7 +69,7 @@ def populate_video_data(project_path: str) -> List[VideoData2D]:
                 video_path = None
 
         if time_series_paths:
-            time_series_path = time_series_dir / f"{dlc_path.stem}.avi"
+            time_series_path = time_series_dir / f"{dlc_path.stem}.csv"
             if not video_path.exists():
                 warnings.warn(f"Video file {video_path} does not exist for DLC data {dlc_path}. Ignoring.")
                 video_path = None
