@@ -1,16 +1,12 @@
-import pandas as pd
 import polars as pl
 from dataclasses import dataclass
 from typing import Protocol
 from typing import List
 import numpy as np
-from scipy.signal import spectrogram, savgol_filter
+from scipy.signal import savgol_filter
 from scipy.signal import ShortTimeFFT
 from typing import List, Optional
     
-from dataclasses import dataclass
-import polars as pl
-import numpy as np
 
 
 class DataProcessingStrategy(Protocol):
