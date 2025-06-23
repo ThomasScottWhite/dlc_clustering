@@ -50,33 +50,13 @@ A column named `shock_flag` will show countdowns or time since a shock occurred.
 A column named `note_text` will overlay text messages on the video.
 
 ### Example Script
+An example script for generating text and flags for videos can be found in ```example_generate_flag.py```
 
-The following Python script generates a time series file with:
 
-- A column displaying `"This is a test"` on every frame.
-- A flag that is active (`True`) at frames 300 and 600.
+## Additional Documentation
 
-```python
-from pathlib import Path
-import cv2
-import pandas as pd
+For more information on data processing and clustering strategies, refer to the following documentation files:
 
-example_project = Path("/home/thomas/Documents/dlc_clustering/data/example_project")
-video_paths = example_project / "videos"
-time_series_paths = example_project / "time_series"
+- [Data Processing Strategies](data_processing.md): Learn how pose estimation data is normalized, filtered, or converted into features like velocity or angles.
+- [Clustering Strategies](clustering.md): Explore available methods for grouping behavior patterns using techniques such as PCA + KMeans or UMAP + HDBSCAN.
 
-for video_path in video_paths.glob("*.avi"):
-    video = cv2.VideoCapture(str(video_path))
-    fps = video.get(cv2.CAP_PROP_FPS)
-    frame_count = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
-    duration = frame_count / fps
-    print(f"Video: {video_path.name}, FPS: {fps}, Frame Count: {frame_count}, Duration: {duration:.2f} seconds")
-
-    df = pd.DataFrame({
-        "text_example_text": ["This is a test"] * frame_count,
-        "flag_example_flag": [False] * frame_count,
-    })
-    df.loc[300, "flag_example_flag"] = True
-    df.loc[600, "flag_example_flag"] = True
-
-    df.to_csv(time_series_paths / f"{video_path.stem}.csv", index=False)
