@@ -96,10 +96,6 @@ class PCAKMeansBoutStrategy:
         return clustered_output
 
 
-"""
-ADDED BY HUGO
-"""
-
 class UmapHdbscanBoutStrategy:
   def __init__(self, n_components: int = 10, bout_length: int = 15, stride: int = 1, umap_args=None, hdbscan_args=None):
         self.n_components = n_components
@@ -191,7 +187,6 @@ class PCAHDBScanBoutStrategy:
         self.hdbscan_args = hdbscan_args or {}
 
   def process(self, df: pl.DataFrame) -> pl.DataFrame:
-    # Pipeline for clustering bouts in a DataFrame using PCA and KMeans
     def get_filtered_mask(df: pl.DataFrame) -> np.ndarray:
         filter_cols = [col for col in df.columns if col.endswith("_filter")]
         if not filter_cols:
