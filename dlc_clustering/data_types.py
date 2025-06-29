@@ -22,6 +22,7 @@ class VideoData2D(TypedDict):
     combined_data: pl.DataFrame | None
     clustering_output: pl.DataFrame | None  
     supervised_labels: pl.DataFrame | None
+    
 class VideoData3D(TypedDict):
     video_paths: List[str]
     dlc_data: pl.DataFrame

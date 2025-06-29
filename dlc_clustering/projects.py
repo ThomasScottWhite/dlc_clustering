@@ -62,7 +62,7 @@ def make_behavior_label_vector(df: pd.DataFrame, behavior_to_id, total_frames: i
     behavior_df = df[["Behavior", "Behavior type", "Image index"]].dropna()
     unique_behaviors = behavior_df["Behavior"].unique()
 
-    label_vector = np.zeros(total_frames, dtype=int)
+    label_vector = np.full(total_frames, fill_value=-1, dtype=int)
 
     for behavior in unique_behaviors:
         sub_df = behavior_df[behavior_df["Behavior"] == behavior].reset_index(drop=True)
@@ -140,7 +140,7 @@ def populate_video_data(project_path: str) -> List[VideoData2D]:
             supervised_labels=label_df,
         ))
 
-    return video_data
+    return video_data, behavior_to_id
 
 class Project:
     project_name: str
@@ -167,7 +167,7 @@ class Project:
         self.clustering_strategy = clustering_strategy
         self.data_processing_strategies = data_processing_strategies
 
-        self.video_data = populate_video_data(project_path)
+        self.video_data, self.behaviour_to_id = populate_video_data(project_path)
 
     def exclude_columns(self, columns: List[str]) -> None:
         """
@@ -218,15 +218,8 @@ class Project:
 
     def cluster_data(self) -> None:
         """Apply the clustering strategy to the processed data."""
-        for video_data in self.video_data:
-            if not video_data["processed_dlc_data"]:
-                continue
+        self.clustering_strategy.process(self)
 
-            combined_data = video_data.get("combined_data")
-            if combined_data is None:
-                continue
-
-            video_data["clustering_output"] = self.clustering_strategy.process(combined_data)
 
     def get_cluster_output(self, combined: bool = True, drop_excess_rows: bool = True) -> pl.DataFrame | List[pl.DataFrame]:
         """

@@ -6,255 +6,159 @@ from collections import defaultdict
 from typing import Protocol
 from sklearn.cluster import HDBSCAN
 import umap
+from dataclasses import dataclass
+import numpy as np
+from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans
+
+def get_bouts(df: pl.DataFrame, bout_length: int, stride: int = 1) -> list[dict]:
+    bouts = []
+    for video_name in df["video_name"].unique().to_list():
+        video_df = df.filter(pl.col("video_name") == video_name)
+        bout_id = 1
+        for i in range(0, len(video_df) - bout_length + 1, stride):
+            bout = video_df.slice(i, bout_length)
+            row_indices = bout["row_idx"].to_list()
+            bouts.append({
+                "video_name": video_name,
+                "row_indices": row_indices,
+                "features": bout.drop(["video_name", "row_idx"]),  # drop metadata
+                "bout_id": bout_id,
+            })
+            bout_id += 1
+    return bouts
+
+
+def apply_clustering(project, clustering_strategy, bout_length=10, stride=5):
+    all_data = []
+    for video_data in project.video_data:
+        if not video_data["processed_dlc_data"]:
+            continue
+
+        combined_data = video_data.get("combined_data")
+        if combined_data is None:
+            continue
+
+        combined_data = combined_data.with_row_index(name="row_idx")  # <- moved here
+
+        combined_data = combined_data.with_columns([
+            pl.lit(video_data["video_name"]).alias("video_name")
+        ])
+        all_data.append(combined_data)
+
+    df = pl.concat(all_data, how="vertical")
+
+
+    # Filter out invalid rows
+    filter_cols = [col for col in df.columns if col.endswith("_filter")]
+    if filter_cols:
+        mask = df.select(pl.any_horizontal([pl.col(col) for col in filter_cols])).to_series()
+        df = df.filter(~mask)
+
+    bouts = get_bouts(df, bout_length=15, stride=5)
+    cluster_labels = clustering_strategy(bouts)
+
+    for bout, label in zip(bouts, cluster_labels):
+        bout["cluster"] = label
+
+
+    # This will hold tuples like (video_name, row_idx) → cluster
+    row_to_cluster = []
+
+    for bout in bouts:
+        for row_idx in bout["row_indices"]:
+            row_to_cluster.append({
+                "video_name": bout["video_name"],
+                "row_idx": row_idx,
+                "cluster": bout["cluster"],
+                "bout_id": bout["bout_id"], 
+            })
+
+    cluster_df = pl.DataFrame(row_to_cluster)
+    cluster_df = cluster_df.unique(subset=["video_name", "row_idx"], keep="first")
+    
+    for video_data in project.video_data:
+        video_name = video_data["video_name"]
+        combined_data = video_data.get("combined_data")
+        if combined_data is None:
+            continue
+
+        # Restore row indices
+        combined_data = combined_data.with_row_index(name="row_idx")
+
+        # Join with cluster assignments
+
+        clustered_video_data = cluster_df.filter(pl.col("video_name") == video_name)
+        updated_data = combined_data.join(
+            clustered_video_data,
+            on=["row_idx"],
+            how="left"
+        )
+
+        video_data["clustering_output"] = updated_data
+
 
 class ClusteringStrategy(Protocol):
-    def process(self, df: pl.DataFrame) -> pl.DataFrame:
-        """
-        Process the input DataFrame and return a clustered DataFrame.
-        
-        Parameters:
-        - df: Input DataFrame containing the data to be clustered.
-        
-        Returns:
-        - A DataFrame with clustering results.
-        """
+    n_components: int
+    n_clusters: int
+    bout_length: int
+    stride: int
+
+    def process(self, bouts: list[dict], project) -> list[int]:
+        """Process bouts and return cluster labels."""
         pass
 
-class PCAKMeansBoutStrategy:
-    def __init__(self, n_components: int = 2, n_clusters: int = 5, bout_length: int = 15, stride: int = 1):
-        self.n_components = n_components
-        self.n_clusters = n_clusters
-        self.bout_length = bout_length
-        self.stride = stride
+@dataclass
+class PCAKMeansBoutStrategy(ClusteringStrategy):
+    n_components: int
+    n_clusters: int
+    bout_length: int
+    stride: int
 
-    def process(self, df: pl.DataFrame) -> pl.DataFrame:
-        # Pipeline for clustering bouts in a DataFrame using PCA and KMeans
-        def get_filtered_mask(df: pl.DataFrame) -> np.ndarray:
-            filter_cols = [col for col in df.columns if col.endswith("_filter")]
-            if not filter_cols:
-                return np.zeros(len(df), dtype=bool)
-            return (
-                df.select(pl.any_horizontal([pl.col(col) for col in filter_cols]))
-                .to_series()
-                .to_numpy()
-            )
+    def process(self, project) -> list[int]:
+        """Process bouts and return cluster labels."""
 
-        def get_valid_bouts(X: np.ndarray, valid_indices: list[int], bout_length: int, stride: int):
-            bouts, bout_to_frames = [], []
-            for i in range(0, len(valid_indices) - bout_length + 1, stride):
-                frame_indices = valid_indices[i:i + bout_length]
-                bouts.append(X[frame_indices].flatten())
-                bout_to_frames.append(frame_indices)
-            return bouts, bout_to_frames
-
-        def cluster_bouts(bouts: list[np.ndarray]):
-            if not bouts:
-                return [], []
-            X_bouts = np.stack(bouts)
-            bouts_pca = PCA(n_components=self.n_components).fit_transform(X_bouts)
-            labels = KMeans(n_clusters=self.n_clusters, n_init="auto").fit(bouts_pca).labels_
-            return labels, bouts
-
-        def assign_clusters_to_frames(n_frames, filtered_mask, bout_to_frames, labels):
-            cluster_map, bout_map = defaultdict(list), defaultdict(list)
-            for bout_id, (frames, label) in enumerate(zip(bout_to_frames, labels)):
-                for idx in frames:
-                    cluster_map[idx].append(label)
-                    bout_map[idx].append(bout_id)
-
-            cluster_per_frame, bout_id_per_frame = [], []
-            for i in range(n_frames):
-                if filtered_mask[i] or i not in cluster_map:
-                    cluster_per_frame.append(-1)
-                    bout_id_per_frame.append(-1)
-                else:
-                    cluster_per_frame.append(cluster_map[i][-1])
-                    bout_id_per_frame.append(bout_map[i][-1])
-            return cluster_per_frame, bout_id_per_frame
-
-        # === Pipeline ===
-        filtered_mask = get_filtered_mask(df)
-
-        usable_cols = [col for col in df.columns if not col.endswith("_filter")]
-        X = np.nan_to_num(df.select(usable_cols).to_numpy())
-
-        valid_indices = [i for i, valid in enumerate(filtered_mask) if not valid]
-        bouts, bout_to_frames = get_valid_bouts(X, valid_indices, self.bout_length, self.stride)
-        labels, _ = cluster_bouts(bouts)
-
-        cluster_per_frame, bout_id_per_frame = assign_clusters_to_frames(
-            n_frames=len(df),
-            filtered_mask=filtered_mask,
-            bout_to_frames=bout_to_frames,
-            labels=labels
-        )
+        def clustering_strategy(bouts: list[dict]) -> list[int]:
+            X = np.array([b["features"].to_numpy().flatten() for b in bouts])
+            X = PCA(n_components=self.n_components).fit_transform(X)  # Optional dimensionality reduction
+            cluster_labels = KMeans(n_clusters=self.n_clusters).fit_predict(X)
+            return cluster_labels
         
-        clustered_output = df.with_columns([
-            pl.Series("cluster", np.array(cluster_per_frame, dtype=np.int32)),
-            pl.Series("bout_id", np.array(bout_id_per_frame, dtype=np.int32)),
-        ])
-        return clustered_output
+        apply_clustering(project, clustering_strategy, bout_length=self.bout_length, stride=self.stride)
 
 
-class UmapHdbscanBoutStrategy:
-  def __init__(self, n_components: int = 10, bout_length: int = 15, stride: int = 1, umap_args=None, hdbscan_args=None):
-        self.n_components = n_components
-        self.bout_length = bout_length
-        self.stride = stride
-        self.umap_args = umap_args or {}
-        self.hdbscan_args = hdbscan_args or {}
+@dataclass
+class HDBSCANBoutStrategy(ClusteringStrategy):
+    n_components: int
+    n_clusters: int
+    bout_length: int
+    stride: int
 
-  def process(self, df: pl.DataFrame) -> pl.DataFrame:
-    # Pipeline for clustering bouts in a DataFrame using PCA and KMeans
-    def get_filtered_mask(df: pl.DataFrame) -> np.ndarray:
-        filter_cols = [col for col in df.columns if col.endswith("_filter")]
-        if not filter_cols:
-            return np.zeros(len(df), dtype=bool)
-        return (
-            df.select(pl.any_horizontal([pl.col(col) for col in filter_cols]))
-            .to_series()
-            .to_numpy()
-        )
+    def process(self, project) -> list[int]:
+        """Process bouts and return cluster labels."""
 
-    def get_valid_bouts(X: np.ndarray, valid_indices: list[int], bout_length: int, stride: int):
-        bouts, bout_to_frames = [], []
-        for i in range(0, len(valid_indices) - bout_length + 1, stride):
-            frame_indices = valid_indices[i:i + bout_length]
-            bouts.append(X[frame_indices].flatten())
-            bout_to_frames.append(frame_indices)
-        return bouts, bout_to_frames
-
-    def cluster_bouts(bouts: list[np.ndarray]):
-        if not bouts:
-            return [], []
-        X_bouts = np.stack(bouts)
+        def clustering_strategy(bouts: list[dict]) -> list[int]:
+            X = np.array([b["features"].to_numpy().flatten() for b in bouts])
+            X = PCA(n_components=self.n_components).fit_transform(X)
+            cluster_labels = HDBSCAN(min_cluster_size=self.n_clusters).fit_predict(X)
+            return cluster_labels
         
-        dim_red = umap.UMAP(n_components=self.n_components, **self.umap_args)
-        X_umap = dim_red.fit_transform(X_bouts)
+        apply_clustering(project, clustering_strategy, bout_length=self.bout_length, stride=self.stride)
 
-        clust = HDBSCAN(**self.hdbscan_args)
-        labels = clust.fit_predict(X_umap)
+@dataclass
+class UMAPKMeansBoutStrategy(ClusteringStrategy):
+    n_components: int
+    n_clusters: int
+    bout_length: int
+    stride: int
 
-        return labels, bouts
+    def process(self, project) -> list[int]:
+        """Process bouts and return cluster labels."""
 
-    def assign_clusters_to_frames(n_frames, filtered_mask, bout_to_frames, labels):
-        cluster_map, bout_map = defaultdict(list), defaultdict(list)
-        for bout_id, (frames, label) in enumerate(zip(bout_to_frames, labels)):
-            for idx in frames:
-                cluster_map[idx].append(label)
-                bout_map[idx].append(bout_id)
-
-        cluster_per_frame, bout_id_per_frame = [], []
-        for i in range(n_frames):
-            if filtered_mask[i] or i not in cluster_map:
-                cluster_per_frame.append(-1)
-                bout_id_per_frame.append(-1)
-            else:
-                cluster_per_frame.append(cluster_map[i][-1])
-                bout_id_per_frame.append(bout_map[i][-1])
-        return cluster_per_frame, bout_id_per_frame
-
-    # === Pipeline ===
-    filtered_mask = get_filtered_mask(df)
-
-    usable_cols = [col for col in df.columns if not col.endswith("_filter")]
-    X = np.nan_to_num(df.select(usable_cols).to_numpy())
-
-    valid_indices = [i for i, valid in enumerate(filtered_mask) if not valid]
-    bouts, bout_to_frames = get_valid_bouts(X, valid_indices, self.bout_length, self.stride)
-    labels, _ = cluster_bouts(bouts)
-
-    cluster_per_frame, bout_id_per_frame = assign_clusters_to_frames(
-        n_frames=len(df),
-        filtered_mask=filtered_mask,
-        bout_to_frames=bout_to_frames,
-        labels=labels
-    )
-
-    clustered_output = df.with_columns([
-        pl.Series("cluster", np.array(cluster_per_frame, dtype=np.int32)),
-        pl.Series("bout_id", np.array(bout_id_per_frame, dtype=np.int32)),
-    ])
-
-    return clustered_output
-  
-class PCAHDBScanBoutStrategy:
-  def __init__(self, n_components: int = 10, bout_length: int = 15, stride: int = 1, umap_args=None, hdbscan_args=None):
-        self.n_components = n_components
-        self.bout_length = bout_length
-        self.stride = stride
-        self.umap_args = umap_args or {}
-        self.hdbscan_args = hdbscan_args or {}
-
-  def process(self, df: pl.DataFrame) -> pl.DataFrame:
-    def get_filtered_mask(df: pl.DataFrame) -> np.ndarray:
-        filter_cols = [col for col in df.columns if col.endswith("_filter")]
-        if not filter_cols:
-            return np.zeros(len(df), dtype=bool)
-        return (
-            df.select(pl.any_horizontal([pl.col(col) for col in filter_cols]))
-            .to_series()
-            .to_numpy()
-        )
-
-    def get_valid_bouts(X: np.ndarray, valid_indices: list[int], bout_length: int, stride: int):
-        bouts, bout_to_frames = [], []
-        for i in range(0, len(valid_indices) - bout_length + 1, stride):
-            frame_indices = valid_indices[i:i + bout_length]
-            bouts.append(X[frame_indices].flatten())
-            bout_to_frames.append(frame_indices)
-        return bouts, bout_to_frames
-
-    def cluster_bouts(bouts: list[np.ndarray], n_components: int = 2, hdbscan_args: dict = {}):
-        if not bouts:
-            return [], []
+        def clustering_strategy(bouts: list[dict]) -> list[int]:
+            X = np.array([b["features"].to_numpy().flatten() for b in bouts])
+            X = umap.UMAP(n_components=self.n_components).fit_transform(X)
+            cluster_labels = KMeans(n_clusters=self.n_clusters).fit_predict(X)
+            return cluster_labels
         
-        X_bouts = np.stack(bouts)
-
-        pca = PCA(n_components=n_components)
-        X_pca = pca.fit_transform(X_bouts)
-
-        clust = HDBSCAN(**hdbscan_args)
-        labels = clust.fit_predict(X_pca)
-
-        return labels, bouts
-        
-    def assign_clusters_to_frames(n_frames, filtered_mask, bout_to_frames, labels):
-        cluster_map, bout_map = defaultdict(list), defaultdict(list)
-        for bout_id, (frames, label) in enumerate(zip(bout_to_frames, labels)):
-            for idx in frames:
-                cluster_map[idx].append(label)
-                bout_map[idx].append(bout_id)
-
-        cluster_per_frame, bout_id_per_frame = [], []
-        for i in range(n_frames):
-            if filtered_mask[i] or i not in cluster_map:
-                cluster_per_frame.append(-1)
-                bout_id_per_frame.append(-1)
-            else:
-                cluster_per_frame.append(cluster_map[i][-1])
-                bout_id_per_frame.append(bout_map[i][-1])
-        return cluster_per_frame, bout_id_per_frame
-
-    # === Pipeline ===
-    filtered_mask = get_filtered_mask(df)
-
-    usable_cols = [col for col in df.columns if not col.endswith("_filter")]
-    X = np.nan_to_num(df.select(usable_cols).to_numpy())
-
-    valid_indices = [i for i, valid in enumerate(filtered_mask) if not valid]
-    bouts, bout_to_frames = get_valid_bouts(X, valid_indices, self.bout_length, self.stride)
-    labels, _ = cluster_bouts(bouts)
-
-    cluster_per_frame, bout_id_per_frame = assign_clusters_to_frames(
-        n_frames=len(df),
-        filtered_mask=filtered_mask,
-        bout_to_frames=bout_to_frames,
-        labels=labels
-    )
-
-    clustered_output = df.with_columns([
-        pl.Series("cluster", np.array(cluster_per_frame, dtype=np.int32)),
-        pl.Series("bout_id", np.array(bout_id_per_frame, dtype=np.int32)),
-    ])
-    return clustered_output
+        apply_clustering(project, clustering_strategy, bout_length=self.bout_length, stride=self.stride)
