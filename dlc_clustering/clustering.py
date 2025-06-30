@@ -234,10 +234,12 @@ class UMAPKMeansBoutStrategy(ClusteringStrategy):
 class RandomForestBoutClassifier:
     bout_length = 15
     stride = 5
+    n_estimators = 100
+    random_state = None
 
-    def __init__(self, n_estimators=100, random_state=None):
+    def __init__(self):
         from sklearn.ensemble import RandomForestClassifier as SklearnRF
-        self.model = SklearnRF(n_estimators=n_estimators, random_state=random_state)
+        self.model = SklearnRF(n_estimators=self.n_estimators, random_state=self.random_state)
 
     def train(self, project):
 
