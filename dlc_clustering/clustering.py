@@ -230,7 +230,58 @@ class UMAPKMeansBoutStrategy(ClusteringStrategy):
         
         apply_clustering(project, clustering_strategy, bout_length=self.bout_length, stride=self.stride)
 
+# Supervised Clustering
 
+def prepare_supervised_dataset(project):
+    all_data = []
+    for video_data in project.video_data:
+        if not video_data["processed_dlc_data"]:
+            continue
+
+        combined_data = video_data.get("combined_data")
+        if combined_data is None:
+            continue
+
+        supervised_labels = video_data.get("supervised_labels")
+        if supervised_labels is None:
+            continue
+
+        combined_data = pl.concat([
+            combined_data,
+            supervised_labels
+        ], how="horizontal")
+
+        combined_data = combined_data.with_row_index(name="row_idx") 
+
+
+        combined_data = combined_data.with_columns([
+            pl.lit(video_data["video_name"]).alias("video_name"),
+        ])
+        all_data.append(combined_data)
+
+    df = pl.concat(all_data, how="vertical")
+
+
+    # Filter out invalid rows
+    filter_cols = [col for col in df.columns if col.endswith("_filter")]
+    if filter_cols:
+        mask = df.select(pl.any_horizontal([pl.col(col) for col in filter_cols])).to_series()
+        df = df.filter(~mask)
+        # Remove filter columns
+        df = df.drop(filter_cols)
+
+    # Filter out rows where label is -1
+    # if "label" in df.columns:
+    #     df = df.filter(pl.col("label") != -1)
+
+    supervised_bouts = get_bouts(df, bout_length=15, stride=5, supervised_labels=True)
+    X = np.array([
+        bout["features"].to_numpy().flatten()
+        for bout in supervised_bouts
+    ])
+    y = np.array([bout.get("label") for bout in supervised_bouts])
+
+    return X, y
 class RandomForestBoutClassifier:
     bout_length = 15
     stride = 5
@@ -243,55 +294,8 @@ class RandomForestBoutClassifier:
 
     def train(self, project):
 
-        all_data = []
-        for video_data in project.video_data:
-            if not video_data["processed_dlc_data"]:
-                continue
 
-            combined_data = video_data.get("combined_data")
-            if combined_data is None:
-                continue
-
-            supervised_labels = video_data.get("supervised_labels")
-            if supervised_labels is None:
-                continue
-
-            combined_data = pl.concat([
-                combined_data,
-                supervised_labels
-            ], how="horizontal")
-
-            combined_data = combined_data.with_row_index(name="row_idx") 
-
-
-            combined_data = combined_data.with_columns([
-                pl.lit(video_data["video_name"]).alias("video_name"),
-            ])
-            all_data.append(combined_data)
-
-        df = pl.concat(all_data, how="vertical")
-
-
-        # Filter out invalid rows
-        filter_cols = [col for col in df.columns if col.endswith("_filter")]
-        if filter_cols:
-            mask = df.select(pl.any_horizontal([pl.col(col) for col in filter_cols])).to_series()
-            df = df.filter(~mask)
-            # Remove filter columns
-            df = df.drop(filter_cols)
-
-        # Filter out rows where label is -1
-        # if "label" in df.columns:
-        #     df = df.filter(pl.col("label") != -1)
-
-        supervised_bouts = get_bouts(df, bout_length=15, stride=5, supervised_labels=True)
-        X = np.array([
-            bout["features"].to_numpy().flatten()
-            for bout in supervised_bouts
-        ])
-        y = np.array([bout.get("label") for bout in supervised_bouts])
-
-
+        X, y = prepare_supervised_dataset(project)
         # Split data
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
