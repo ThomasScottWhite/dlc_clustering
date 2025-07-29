@@ -15,6 +15,14 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report
 
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report
+import numpy as np
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.svm import SVC
+from sklearn.neural_network import MLPClassifier
+
 
 def get_bouts(df: pl.DataFrame, bout_length: int, stride: int = 1, supervised_labels=False) -> list[dict]:
     bouts = []
@@ -319,4 +327,92 @@ class RandomForestBoutClassifier:
         
         apply_clustering(project, clustering_strategy, bout_length=self.bout_length, stride=self.stride)
 
+
+class GradientBoostingBoutClassifier:
+    bout_length = 15
+    stride = 5
+
+    def __init__(self):
+        self.model = GradientBoostingClassifier(random_state=42)
+
+    def train(self, project):
+        X, y = prepare_supervised_dataset(project)
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        self.model.fit(X_train, y_train)
+        y_pred = self.model.predict(X_test)
+        print(classification_report(y_test, y_pred))
+
+    def process(self, project) -> list[int]:
+        self.train(project)
+        def clustering_strategy(bouts: list[dict]) -> list[int]:
+            X = np.array([b["features"].to_numpy().flatten() for b in bouts])
+            return self.model.predict(X)
+        apply_clustering(project, clustering_strategy, bout_length=self.bout_length, stride=self.stride)
+
+
+class KNearestBoutClassifier:
+    bout_length = 15
+    stride = 5
+
+    def __init__(self, n_neighbors=5):
+        self.model = KNeighborsClassifier(n_neighbors=n_neighbors)
+
+    def train(self, project):
+        X, y = prepare_supervised_dataset(project)
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        self.model.fit(X_train, y_train)
+        y_pred = self.model.predict(X_test)
+        print(classification_report(y_test, y_pred))
+
+    def process(self, project) -> list[int]:
+        self.train(project)
+        def clustering_strategy(bouts: list[dict]) -> list[int]:
+            X = np.array([b["features"].to_numpy().flatten() for b in bouts])
+            return self.model.predict(X)
+        apply_clustering(project, clustering_strategy, bout_length=self.bout_length, stride=self.stride)
+
+
+class SVMBoutClassifier:
+    bout_length = 15
+    stride = 5
+
+    def __init__(self, kernel="rbf", C=1.0):
+        self.model = SVC(kernel=kernel, C=C)
+
+    def train(self, project):
+        X, y = prepare_supervised_dataset(project)
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        self.model.fit(X_train, y_train)
+        y_pred = self.model.predict(X_test)
+        print(classification_report(y_test, y_pred))
+
+    def process(self, project) -> list[int]:
+        self.train(project)
+        def clustering_strategy(bouts: list[dict]) -> list[int]:
+            X = np.array([b["features"].to_numpy().flatten() for b in bouts])
+            return self.model.predict(X)
+        apply_clustering(project, clustering_strategy, bout_length=self.bout_length, stride=self.stride)
+
+
+
+class MLPBoutClassifier:
+    bout_length = 15
+    stride = 5
+
+    def __init__(self, hidden_layer_sizes=(100,), max_iter=300):
+        self.model = MLPClassifier(hidden_layer_sizes=hidden_layer_sizes, max_iter=max_iter, random_state=42)
+
+    def train(self, project):
+        X, y = prepare_supervised_dataset(project)
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        self.model.fit(X_train, y_train)
+        y_pred = self.model.predict(X_test)
+        print(classification_report(y_test, y_pred))
+
+    def process(self, project) -> list[int]:
+        self.train(project)
+        def clustering_strategy(bouts: list[dict]) -> list[int]:
+            X = np.array([b["features"].to_numpy().flatten() for b in bouts])
+            return self.model.predict(X)
+        apply_clustering(project, clustering_strategy, bout_length=self.bout_length, stride=self.stride)
 
