@@ -18,7 +18,7 @@ A **bout** is a short, continuous sequence of frames (e.g., 15 frames) used as t
 Frames excluded by a `_filter` column are ignored during clustering and receive a `cluster` of `-1`.
 
 
-## Available Strategies
+# Unsupervised Clustering Strategies
 
 ### `PCAKMeansBoutStrategy`
 
@@ -51,6 +51,67 @@ Clusters frame bouts using **PCA** for dimensionality reduction, then **HDBSCAN*
 **Key Parameters**:
 - `n_components`: Number of PCA components (default: 10).
 - `hdbscan_args`: Optional HDBSCAN parameters.
+
+---  
+
+
+# Supervised Clustering Strategies
+
+These strategies use labeled data to train a supervised classifier on frame bouts. Once trained, the classifier is used to predict the cluster label for each bout based on its features. These approaches may yield higher quality clustering if labeled data is available.
+
+### Shared Parameters
+
+- **`bout_length`**: Number of consecutive frames per bout (default: 15).
+- **`stride`**: Step size to move the sliding window when extracting bouts (default: 5).
+- **`prepare_supervised_dataset(project)`**: Prepares a labeled dataset from all project videos for training.
+
+---
+
+### `RandomForestBoutClassifier`
+
+Uses a **Random Forest** classifier to assign cluster labels to frame bouts.
+
+**Key Parameters**:
+- `n_estimators`: Number of trees (default: 100).
+- `random_state`: Seed for reproducibility.
+
+---
+
+### `GradientBoostingBoutClassifier`
+
+Uses a **Gradient Boosting Classifier** for labeling bouts. Often more accurate than Random Forest for complex patterns.
+
+**Key Parameters**:
+- `random_state`: Seed for reproducibility.
+
+---
+
+### `KNearestBoutClassifier`
+
+Uses **K-Nearest Neighbors (KNN)** to classify bouts based on distance in feature space.
+
+**Key Parameters**:
+- `n_neighbors`: Number of neighbors to consider (default: 5).
+
+---
+
+### `SVMBoutClassifier`
+
+Uses a **Support Vector Machine (SVM)** to classify bout features with a specified kernel.
+
+**Key Parameters**:
+- `kernel`: Kernel type (`"linear"`, `"rbf"`, etc.) (default: `"rbf"`).
+- `C`: Regularization parameter (default: `1.0`).
+
+---
+
+### `MLPBoutClassifier`
+
+Uses a **Multi-Layer Perceptron (MLP)** neural network for clustering.
+
+**Key Parameters**:
+- `hidden_layer_sizes`: Shape of hidden layers (default: `(100,)`).
+- `max_iter`: Maximum training iterations (default: 300).
 
 ---
 
