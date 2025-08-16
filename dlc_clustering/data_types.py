@@ -14,14 +14,16 @@ class DataProcessingOutput(TypedDict):
 
 class VideoData2D(TypedDict):
     video_name: str
-    video_path: str | None
-    dlc_path: str
-    original_dlc_data: pl.DataFrame
+    video_paths: List[str] | None
+    dlc_paths: List[str]
+    original_dlc_data: List[pl.DataFrame]
     time_series_data: pl.DataFrame | None
-    processed_dlc_data: List[DataProcessingOutput] 
+    processed_dlc_data: List[pl.DataFrame]
+    processed_dlc_data_components: List[DataProcessingOutput] 
     combined_data: pl.DataFrame | None
     clustering_output: pl.DataFrame | None  
     supervised_labels: pl.DataFrame | None
+    camera_order: List[str] | None
     
 class VideoData3D(TypedDict):
     video_paths: List[str]

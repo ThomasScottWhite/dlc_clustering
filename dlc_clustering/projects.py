@@ -3,15 +3,16 @@ from dlc_clustering.data_processing import KeepOriginalStrategy
 from dlc_clustering.data_processing import DataProcessingStrategy
 from dlc_clustering.clustering import ClusteringStrategy   
 
-from polars import Float64, Float32
 from pathlib import Path
-from typing import List, Optional, Type
+from typing import List, Optional, Type, Tuple
 import polars as pl
 import glob
 import warnings
 from dlc_clustering.clustering import PCAKMeansBoutStrategy
 import pandas as pd
 import numpy as np
+import re
+from pathlib import Path
 
 def read_hdf(csv_path: str) -> pl.DataFrame:
     """
@@ -78,66 +79,106 @@ def make_behavior_label_vector(df: pd.DataFrame, behavior_to_id, total_frames: i
 
     return pd.DataFrame({"label": label_vector})
 
-def populate_video_data(project_path: str) -> List[VideoData2D]:
+
+
+
+
+def populate_video_data(project_path: str, merge_cameras: bool = True) -> Tuple[list[VideoData2D], dict[str, int]]:
+
+    if merge_cameras:
+        CAM_SUFFIX_RE = re.compile(r"_cam[A-Za-z0-9]+$")
+        def base_key(stem: str) -> str:
+            return CAM_SUFFIX_RE.sub("", stem)
+    else:
+        # keep full stem so nothing is merged
+        def base_key(stem: str) -> str:
+            return stem
+
+    def base_key(stem: str) -> str:
+        return CAM_SUFFIX_RE.sub("", stem)
+
 
     project_path = Path(project_path)
-    if not project_path.exists():
-        raise ValueError(f"Project path {project_path} does not exist. Please provide a valid path.")
-
-    dlc_data_dir = project_path / "dlc_data"
+    dlc_dir = project_path / "dlc_data"
     video_dir = project_path / "videos"
-    time_series_dir = project_path / "time_series"
-    supervised_label_dir = project_path / "supervised_labels"
+    time_series_dir  = project_path / "time_series"
+    supervised_dir  = project_path / "supervised_labels"
 
+    dlc_paths = get_paths(dlc_dir, "*.h5", required=True)
 
-    dlc_h5_paths = get_paths(dlc_data_dir, "*.h5", required=True)
+    # group by base key (e.g., removing _camA, _camB, etc.)
+    grouped: dict[str, list[Path]] = {}
+    for path in dlc_paths:
+        grouped.setdefault(base_key(path.stem), []).append(path)
 
-    supervised_labels_all = load_supervised_labels(supervised_label_dir)
-    behavior_to_id = {b: i + 1 for i, b in enumerate(supervised_labels_all["Behavior"].unique())}
+    # supervised labels are optional
+    has_labels = supervised_dir.exists() and any(supervised_dir.glob("*"))
+    if has_labels:
+        supervised_labels_all = load_supervised_labels(supervised_dir)
+        # handle empty dataframe too
+        if getattr(supervised_labels_all, "empty", False):
+            has_labels = False
+    else:
+        supervised_labels_all = None
 
-    video_data = []
+    behavior_to_id: dict[str, int] = {}
+    if has_labels:
+        behavior_to_id = {b: i + 1 for i, b in enumerate(supervised_labels_all["Behavior"].unique())}
 
-    for dlc_path in dlc_h5_paths:
-        video_path = video_dir / f"{dlc_path.stem}.avi"
-        if not video_path.exists():
-            # warnings.warn(f"Video file {video_path} does not exist. Ignoring.")
-            video_path = None
+    video_data: list[VideoData2D] = []
 
-        time_series_path = time_series_dir / f"{dlc_path.stem}.csv"
-        if not time_series_path.exists():
-            # warnings.warn(f"Time series file {time_series_path} does not exist. Ignoring.")
-            time_series_path = None
+    for key, cam_paths in grouped.items():
+        video_paths: list[str] = []
+        dlc_paths_list: list[str] = []
+        original_dlc_data: list[pl.DataFrame] = []
+        camera_order: list[str] = []
 
-        # Read and cast DLC HDF5 data
-        dlc_data = read_hdf(str(dlc_path))
-        dlc_data = dlc_data.with_columns([
-            pl.col(col).cast(pl.Float32) if dtype == pl.Float64 else pl.col(col)
-            for col, dtype in zip(dlc_data.columns, dlc_data.dtypes)
-        ])
+        for path in sorted(cam_paths):
+            dlc_paths_list.append(str(path))
 
-        # Extract and encode supervised labels
-        supervised_labels = extract_labels_for_dlc(dlc_path.stem, supervised_labels_all)
-        if supervised_labels.empty:
-            # warnings.warn(f"No labels found for {dlc_path.stem}.")
-            label_df = None
-        else:
-            total_frames = dlc_data.height
-            label_df = make_behavior_label_vector(supervised_labels, behavior_to_id, total_frames)
-            label_df = pl.from_pandas(label_df).with_columns(
-                pl.col("label").cast(pl.Int32)
-            )
+            cam_name = CAM_SUFFIX_RE.search(path.stem)
 
-        # Load time series if available
-        time_series_data = pl.read_csv(str(time_series_path)) if time_series_path else None
+            camera_order.append(cam_name.group(0).split("_")[-1] if cam_name else "")
+
+            raw_df = read_hdf(str(path))
+            # downcast float64 to float32 to fix later data type issues
+            float64_cols = [c for c, t in zip(raw_df.columns, raw_df.dtypes) if t == pl.Float64]
+            dlc_df = raw_df.with_columns([pl.col(c).cast(pl.Float32) for c in float64_cols]) 
+            original_dlc_data.append(dlc_df)
+
+            video_path = video_dir / f"{path.stem}.avi"
+            if video_path.exists():
+                video_paths.append(str(video_path))
+
+            time_series_path = time_series_dir / f"{path.stem}.csv"
+            time_series_data = (pl.read_csv(str(time_series_path)) if time_series_path.exists() else None)
+
+        # checks for same frame count across cams
+        heights = [df.height for df in original_dlc_data]
+        if len(set(heights)) != 1:
+            raise ValueError(f"Frame mismatch for {key}: {heights}")
+
+        # labels are optional and keyed by base
+        label_df = None
+        if has_labels:
+            supervised_labels = extract_labels_for_dlc(key, supervised_labels_all)
+            if not getattr(supervised_labels, "empty", True):
+                label_df = pl.from_pandas(
+                    make_behavior_label_vector(supervised_labels, behavior_to_id, heights[0])
+                ).with_columns(pl.col("label").cast(pl.Int32))
 
         video_data.append(VideoData2D(
-            video_name=dlc_path.stem,
-            video_path=str(video_path) if video_path else None,
-            dlc_path=str(dlc_path),
-            original_dlc_data=dlc_data,
+            video_name=key,
+            video_paths=video_paths or None,
+            dlc_paths=dlc_paths_list,
+            original_dlc_data=original_dlc_data,
             time_series_data=time_series_data,
             processed_dlc_data=[],
+            processed_dlc_data_components=[],
+            combined_data=None,
+            clustering_output=[],
             supervised_labels=label_df,
+            camera_order=camera_order,
         ))
 
     return video_data, behavior_to_id
@@ -158,6 +199,7 @@ class Project:
         data_processing_strategies: Optional[List[DataProcessingStrategy]] = [KeepOriginalStrategy(include_likelihood=False)],
         clustering_strategy: Optional[ClusteringStrategy] = PCAKMeansBoutStrategy(n_components=2, n_clusters=5, bout_length=15, stride=1),
         output_path: Optional[str] = None,
+        merge_cameras = True
     ):
         self.project_name = project_name
         self.project_path = project_path
@@ -166,8 +208,9 @@ class Project:
         self.output_path.mkdir(parents=True, exist_ok=True)
         self.clustering_strategy = clustering_strategy
         self.data_processing_strategies = data_processing_strategies
+        self.merge_cameras = merge_cameras
 
-        self.video_data, self.behaviour_to_id = populate_video_data(project_path)
+        self.video_data, self.behaviour_to_id = populate_video_data(project_path, merge_cameras=merge_cameras)
 
     def exclude_columns(self, columns: List[str]) -> None:
         """
@@ -177,6 +220,12 @@ class Project:
         - columns: List of column names to exclude.
         """
         pattern = "|".join(columns)
+        for video in self.video_data:
+            video["original_dlc_data"] = [
+                df.select(pl.exclude("^.*(" + pattern + ").*$")) for df in video["original_dlc_data"]
+            ]
+
+
         for video_data in self.video_data:
             video_data["original_dlc_data"] = video_data["original_dlc_data"].select(
                 pl.exclude("^.*(" + pattern + ").*$")
@@ -191,30 +240,49 @@ class Project:
         - columns: List of substrings or regex patterns to match column names for inclusion.
         """
         pattern = "|".join(columns)  # e.g., "nose|jaw"
-        for video_data in self.video_data:
-            video_data["original_dlc_data"] = video_data["original_dlc_data"].select(
-                pl.col("^.*(" + pattern + ").*$")
-            )
+
+        for video in self.video_data:
+            video["original_dlc_data"] = [
+                df.select(pl.col("^.*(" + pattern + ").*$")) for df in video["original_dlc_data"]
+            ]
 
     def process_data(self) -> None:
-        """Process the DLC data using the defined strategies."""
-        for video_data in self.video_data:
-            original_data = video_data["original_dlc_data"]
-            for strategy in self.data_processing_strategies:
-                processed_data = strategy.process(original_data)
-                video_data["processed_dlc_data"].append({
-                    "strategy": strategy,
-                    "result": processed_data,
-                    "completed": True,
-                })
+        """Process each camera's DLC DataFrame with all strategies."""
+        for video in self.video_data:
+            video["processed_dlc_data"] = []
+            video["processed_dlc_data_components"] = [] 
+            video["combined_data"] = []
 
-            # Combine all processed outputs horizontally
-            combined = [
-                output["result"]
-                for output in video_data["processed_dlc_data"]
-                if output["result"] is not None
-            ]
-            video_data["combined_data"] = pl.concat(combined, how="horizontal") if combined else None
+
+            for cam_idx, original_df in enumerate(video["original_dlc_data"]):
+                result_dfs = []
+
+                for strategy in self.data_processing_strategies:
+                    result = strategy.process(original_df)
+
+                    result_dfs.append({
+                        "strategy": strategy,
+                        "result": result,
+                    })
+
+                # save per-cam outputs
+                video["processed_dlc_data_components"].append(result_dfs)
+
+                # horizontally combine results for this cam
+                result_dfs = [r["result"] for r in result_dfs if r["result"] is not None]
+                combined = pl.concat(result_dfs, how="horizontal")
+
+                # prefix columns with cam name, if cam name exists
+                if video["camera_order"][cam_idx] != "":
+                    cam_prefix = video["camera_order"][cam_idx].lstrip("_") + "_"
+                    combined = combined.rename({c: f"{cam_prefix}{c}" for c in combined.columns})
+
+                video["processed_dlc_data"].append(combined)
+            
+            # Horizontally combine all cams' processed data
+            combined_dfs = [df for df in video["processed_dlc_data"] if df is not None]
+            if combined_dfs:
+                video["combined_data"] = pl.concat(combined_dfs, how="horizontal")
 
     def cluster_data(self) -> None:
         """Apply the clustering strategy to the processed data."""
@@ -236,7 +304,7 @@ class Project:
 
             # Add video name and enforce i32 types
             cluster_output = cluster_output.with_columns([
-                pl.lit(Path(video_data["dlc_path"]).stem).alias("video_name"),
+                pl.lit(Path(video_data["video_name"]).stem).alias("video_name"),
                 pl.col("cluster").cast(pl.Int32),
                 pl.col("bout_id").cast(pl.Int32),
             ])
