@@ -6,22 +6,17 @@ from collections import defaultdict
 from typing import Protocol
 from sklearn.cluster import HDBSCAN
 import umap
-from dataclasses import dataclass
-import numpy as np
-from sklearn.decomposition import PCA
-from sklearn.cluster import KMeans
 
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report
 
 from sklearn.ensemble import GradientBoostingClassifier
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report
-import numpy as np
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
 from sklearn.neural_network import MLPClassifier
+from dataclasses import dataclass, field
+from typing import Optional, List
 
 
 def get_bouts(df: pl.DataFrame, bout_length: int, stride: int = 1, supervised_labels=False) -> list[dict]:
@@ -290,49 +285,54 @@ def prepare_supervised_dataset(project):
     y = np.array([bout.get("label") for bout in supervised_bouts])
 
     return X, y
+
+@dataclass
 class RandomForestBoutClassifier:
-    bout_length = 15
-    stride = 5
-    n_estimators = 100
-    random_state = None
+    bout_length: int = 15
+    stride: int = 5
+    n_estimators: int = 100
+    random_state: Optional[int] = None
+    model: RandomForestClassifier = field(init=False, repr=False)
 
-    def __init__(self):
-        from sklearn.ensemble import RandomForestClassifier as SklearnRF
-        self.model = SklearnRF(n_estimators=self.n_estimators, random_state=self.random_state)
+    def __post_init__(self):
+        self.model = RandomForestClassifier(
+            n_estimators=self.n_estimators,
+            random_state=self.random_state
+        )
 
-    def train(self, project):
-
-
+    def train(self, project) -> None:
         X, y = prepare_supervised_dataset(project)
-        # Split data
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-        # Train model
-        self.model = RandomForestClassifier(n_estimators=100, random_state=42)
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=42
+        )
         self.model.fit(X_train, y_train)
-
-        # Predict and evaluate
         y_pred = self.model.predict(X_test)
         print(classification_report(y_test, y_pred))
 
-    def process(self, project) -> list[int]:
-        """Process bouts and return cluster labels."""
-
+    def process(self, project) -> List[int]:
+        """Process bouts and return predicted labels."""
         self.train(project)
 
-        def clustering_strategy(bouts: list[dict]) -> list[int]:
-            X = np.array([b["features"].to_numpy().flatten() for b in bouts])
-            cluster_labels = self.model.predict(X)
-            return cluster_labels
-        
-        apply_clustering(project, clustering_strategy, bout_length=self.bout_length, stride=self.stride)
+        def clustering_strategy(bouts: List[dict]) -> List[int]:
+            X = np.stack([b["features"].to_numpy().ravel() for b in bouts])
+            preds = self.model.predict(X)
+            return preds.tolist()
+
+        labels = apply_clustering(
+            project,
+            clustering_strategy,
+            bout_length=self.bout_length,
+            stride=self.stride
+        )
+        return labels
 
 
+@dataclass
 class GradientBoostingBoutClassifier:
     bout_length = 15
     stride = 5
 
-    def __init__(self):
+    def __post_init__(self):
         self.model = GradientBoostingClassifier(random_state=42)
 
     def train(self, project):
@@ -350,11 +350,13 @@ class GradientBoostingBoutClassifier:
         apply_clustering(project, clustering_strategy, bout_length=self.bout_length, stride=self.stride)
 
 
+
+@dataclass
 class KNearestBoutClassifier:
     bout_length = 15
     stride = 5
 
-    def __init__(self, n_neighbors=5):
+    def __post_init__(self, n_neighbors=5):
         self.model = KNeighborsClassifier(n_neighbors=n_neighbors)
 
     def train(self, project):
@@ -372,11 +374,13 @@ class KNearestBoutClassifier:
         apply_clustering(project, clustering_strategy, bout_length=self.bout_length, stride=self.stride)
 
 
+
+@dataclass
 class SVMBoutClassifier:
     bout_length = 15
     stride = 5
 
-    def __init__(self, kernel="rbf", C=1.0):
+    def __post_init__(self, kernel="rbf", C=1.0):
         self.model = SVC(kernel=kernel, C=C)
 
     def train(self, project):
@@ -395,11 +399,12 @@ class SVMBoutClassifier:
 
 
 
+@dataclass
 class MLPBoutClassifier:
     bout_length = 15
     stride = 5
 
-    def __init__(self, hidden_layer_sizes=(100,), max_iter=300):
+    def __post_init__(self, hidden_layer_sizes=(100,), max_iter=300):
         self.model = MLPClassifier(hidden_layer_sizes=hidden_layer_sizes, max_iter=max_iter, random_state=42)
 
     def train(self, project):
