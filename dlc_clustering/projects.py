@@ -1,14 +1,12 @@
 from dlc_clustering.data_types import ProjectType, VideoData2D
 from dlc_clustering.data_processing import KeepOriginalStrategy
 from dlc_clustering.data_processing import DataProcessingStrategy
-from dlc_clustering.clustering import ClusteringStrategy   
 
 from pathlib import Path
 from typing import List, Optional, Type, Tuple
 import polars as pl
 import glob
 import warnings
-from dlc_clustering.clustering import PCAKMeansBoutStrategy
 import pandas as pd
 import numpy as np
 import re
@@ -94,9 +92,6 @@ def populate_video_data(project_path: str, merge_cameras: bool = True) -> Tuple[
         def base_key(stem: str) -> str:
             return stem
 
-    def base_key(stem: str) -> str:
-        return CAM_SUFFIX_RE.sub("", stem)
-
 
     project_path = Path(project_path)
     dlc_dir = project_path / "dlc_data"
@@ -156,7 +151,9 @@ def populate_video_data(project_path: str, merge_cameras: bool = True) -> Tuple[
         # checks for same frame count across cams
         heights = [df.height for df in original_dlc_data]
         if len(set(heights)) != 1:
-            raise ValueError(f"Frame mismatch for {key}: {heights}")
+            print(f"Frame count mismatch for {key}: {heights}, in videos: {video_paths}, dlc files: {dlc_paths_list}")
+            print("Skipping this set of cameras.")
+            continue
 
         # labels are optional and keyed by base
         label_df = None
@@ -188,7 +185,7 @@ class Project:
     project_path: str
     output_path: Path
     data_processing_strategies: List[DataProcessingStrategy]
-    clustering_strategy: ClusteringStrategy
+    clustering_strategy: any
     project_type: ProjectType
     video_data: List[VideoData2D]
 
@@ -197,7 +194,7 @@ class Project:
         project_name: str,
         project_path: str,
         data_processing_strategies: Optional[List[DataProcessingStrategy]] = [KeepOriginalStrategy(include_likelihood=False)],
-        clustering_strategy: Optional[ClusteringStrategy] = PCAKMeansBoutStrategy(n_components=2, n_clusters=5, bout_length=15, stride=1),
+        clustering_strategy = None,
         output_path: Optional[str] = None,
         merge_cameras = True
     ):

@@ -21,7 +21,6 @@ def open_video_captures(video_paths: List[str]) -> Tuple[List[cv2.VideoCapture],
         if width is None:
             width, height, fps = w, h, f
         else:
-            # STRICT: same resolution & fps
             if (w, h) != (width, height):
                 raise ValueError(f"All videos must share resolution. Got {(w,h)} vs {(width,height)}.")
             if abs(f - fps) > 1e-6:
@@ -188,7 +187,7 @@ def render_videos(
     for cid in valid_clusters:
         print(f"  Cluster {cid}: {Path(out_dir) / f'cluster_{cid}.mp4'}")
     print(f"  All clusters: {all_writer_path}  ({composite_w}x{composite_h} @ {fps}fps)")
-
+Attractor and integrator networks in the brain
 
 def render_cluster_videos(project: Project):
     if not project.video_data:

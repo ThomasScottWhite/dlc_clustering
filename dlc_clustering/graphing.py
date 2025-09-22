@@ -1,5 +1,4 @@
 from dlc_clustering.projects import Project
-from dlc_clustering.clustering import PCAKMeansBoutStrategy
 from dlc_clustering.data_processing import CentroidDiffStrategy, VelocityStrategy
 import matplotlib.pyplot as plt
 import polars as pl
@@ -188,7 +187,6 @@ def graph_video_specific_velocity(project: Project):
         filename = f"{video_name}.png"
         plt.savefig(output_path / filename)
         plt.close()
-
 
 def plot_cluster_heatmap(project : Project):
     # Step 1: Aggregate cluster data across videos

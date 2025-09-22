@@ -1,138 +1,117 @@
-# DLC Clustering - Clustering Strategies
+# DLC Clustering - Clustering Pipelines
+The document describes the DLC data clustering pipelines composed of modular **preprocessors**, **clusterers**, and **classifiers**. These pipelines work on segmented sequences of frames (bouts) to group similar behaviors.
 
-This document describes the available clustering strategies for behavior analysis using DeepLabCut data. These strategies work on segmented sequences of frames and apply dimensionality reduction and clustering algorithms to group similar behaviors.
-
-Each strategy transforms the data and assigns a `cluster` label and a `bout_id` to each frame in the dataset.
-
-## What is a Bout?
-
-A **bout** is a short, continuous sequence of frames (e.g., 15 frames) used as the unit of clustering. Instead of clustering single frames, we extract temporal patterns over bouts to better capture motion and behavior.
-
----
-
-## Shared Parameters
-
-- **`bout_length`**: Number of consecutive frames per bout (default: 15).
-- **`stride`**: Step size to move the sliding window when extracting bouts (default: 1).
-
-Frames excluded by a `_filter` column are ignored during clustering and receive a `cluster` of `-1`.
+Each pipeline processes the data and assigns a `cluster` label and a `bout_id` to each relevant frame in the dataset.
 
 
-# Unsupervised Clustering Strategies
+## Core Concepts
 
-### `PCAKMeansBoutStrategy`
+### What is a Bout?
+A bout is a short, continuous sequence of frames (e.g., 15 frames) that serves as the fundamental unit for clustering. Instead of clustering individual frames, we extract temporal patterns over these bouts to better capture motion and behavior.
 
-Clusters frame bouts using **Principal Component Analysis (PCA)** followed by **K-Means**.
-This a fast, but very simple clustering algorithm.
+### What is a Pipeline?
+A pipeline is a sequence of data processing steps. You can combine different preprocessing steps (like scaling and dimensionality reduction) with a final clustering or classification algorithm to create a custom clustering workflow.
 
-**Key Parameters**:
-- `n_components`: Number of PCA components (default: 2).
-- `n_clusters`: Number of K-Means clusters (default: 5).
-
----
-
-### `UmapHdbscanBoutStrategy`
-
-Clusters frame bouts using **UMAP** (nonlinear dimensionality reduction) followed by **HDBSCAN** (density-based clustering).
+* `UnsupervisedBoutPipeline`: For discovering patterns in data without pre-existing labels.
+* `SupervisedBoutPipeline`: For classifying behaviors using a model trained on user provided labels.
 
 
-**Key Parameters**:
-- `n_components`: Number of UMAP components (default: 10).
-- `umap_args`: Optional UMAP settings (e.g., `n_neighbors`, `min_dist`).
-- `hdbscan_args`: Optional HDBSCAN settings (e.g., `min_cluster_size`).
+## Unsupervised Clustering Pipeline
 
----
+The `UnsupervisedBoutPipeline` is designed for exploratory data analysis where you want the algorithm to discover behavioral groups automatically. It chains together one or more **preprocessors** with a final **clusterer**.
 
-### `PCAHDBScanBoutStrategy`
+### Pipeline Steps
+1.  **Bout Extraction**: Data is segmented into bouts of a specified `bout_length` and `stride`.
+2.  **Feature Flattening**: The time series data for each bout is flattened into a single feature vector.
+3.  **Preprocessing**: Each preprocessor is fit and applied to the feature vectors (e.g., scaling, then PCA).
+4.  **Clustering**: The final clusterer (`KMeans` or `HDBSCAN`) assigns a cluster label to each bout's processed feature vector.
 
-Clusters frame bouts using **PCA** for dimensionality reduction, then **HDBSCAN**.
-
-
-**Key Parameters**:
-- `n_components`: Number of PCA components (default: 10).
-- `hdbscan_args`: Optional HDBSCAN parameters.
-
----  
+### Key Parameters
+-   `preprocessors`: A list of preprocessor objects to apply in sequence.
+-   `clusterer`: The clustering algorithm object.
+-   `bout_length`: Number of consecutive frames per bout (default: 15).
+-   `stride`: Step size for the sliding window when extracting bouts (default: 5).
 
 
-# Supervised Clustering Strategies
+## Supervised Clustering Pipeline
 
-These strategies use labeled data to train a supervised classifier on frame bouts. Once trained, the classifier is used to predict the cluster label for each bout based on its features. These approaches may yield higher quality clustering if labeled data is available.
+The `SupervisedBoutPipeline` uses labeled data to train a classifier. Once trained, this classifier can predict behavioral labels for all the data in the project. This approach is powerful for consistently identifying known behaviors.
 
-### Shared Parameters
+### Pipeline Steps
+1.  **Prepare Dataset**: The `train()` method first calls `prepare_supervised_dataset`, which extracts bouts that have corresponding user-provided labels.
+2.  **Train-Test Split**: The labeled data is split into training and testing sets to evaluate model performance.
+3.  **Fit Preprocessors**: Preprocessors are fit on the training data.
+4.  **Train Classifier**: The classifier is trained on the preprocessed training data and labels. A classification report is printed to show performance on the test set.
+5.  **Process Project Data**: After training, the `process()` method runs the entire project's data (labeled and unlabeled) through the fitted preprocessors and the trained classifier to assign a cluster label to every bout.
 
-- **`bout_length`**: Number of consecutive frames per bout (default: 15).
-- **`stride`**: Step size to move the sliding window when extracting bouts (default: 5).
-- **`prepare_supervised_dataset(project)`**: Prepares a labeled dataset from all project videos for training.
+### Key Parameters
+-   `preprocessors`: A list of preprocessor objects.
+-   `classifier`: The classification algorithm object.
+-   `bout_length`: Number of consecutive frames per bout.
+-   `stride`: Step size for the sliding window.
+-   `test_size`: Fraction of labeled data to use for the test set.
 
----
 
-### `RandomForestBoutClassifier`
+## Pipeline Components
 
-Uses a **Random Forest** classifier to assign cluster labels to frame bouts.
+You can mix and match these components to build your desired pipeline.
 
-**Key Parameters**:
-- `n_estimators`: Number of trees (default: 100).
-- `random_state`: Seed for reproducibility.
+### Preprocessors
+These modules transform the feature space. A standard first step is `SKStandardScaler`.
+-   `SKStandardScaler`: Standardizes features by removing the mean and scaling to unit variance. **Highly recommended.**
+-   `SKPCA`: **Principal Component Analysis**. A fast, linear dimensionality reduction technique.
+    -   `n_components`: Number of principal components to keep.
+-   `UMAPReducer`: **Uniform Manifold Approximation and Projection**. A powerful non-linear technique for dimensionality reduction.
+    -   `n_components`: Number of dimensions for the embedded space.
+    -   `n_neighbors`: The number of neighboring points used for manifold approximation.
+    -   `min_dist`: The minimum distance between embedded points.
 
----
+### Unsupervised Clusterers
+These are used in the `UnsupervisedBoutPipeline`.
+-   `SKKMeans`: **K-Means Clustering**. Partitions data into a pre-determined number of clusters.
+    -   `n_clusters`: The number of clusters to form.
+-   `HDBSCANClusterer`: **Hierarchical Density-Based Spatial Clustering**. A robust algorithm that can find clusters of varying shapes and densities, and marks noise points as unclustered (`-1`).
+    -   `min_cluster_size`: The minimum size of a group to be considered a cluster.
 
-### `GradientBoostingBoutClassifier`
+### Supervised Classifiers
+These are used in the `SupervisedBoutPipeline`.
+-   `SKRandomForest`: A **Random Forest** classifier.
+    -   `n_estimators`: The number of trees in the forest.
+-   `SKGradientBoosting`: A **Gradient Boosting** classifier, often more accurate but slower to train than Random Forest.
+-   `SKSVM`: A **Support Vector Machine** classifier.
+    -   `kernel`: The type of kernel to use (`'rbf'`, `'linear'`, etc.).
+    -   `C`: Regularization parameter.
+-   `SKKNN`: A **K-Nearest Neighbors** classifier.
+    -   `n_neighbors`: Number of neighbors to use for classification.
+-   `SKMLP`: A **Multi-Layer Perceptron** (neural network) classifier.
+    -   `hidden_layer_sizes`: A tuple defining the number of neurons in each hidden layer (e.g., `(100, 50)`).
+    -   `max_iter`: Maximum number of training iterations.
 
-Uses a **Gradient Boosting Classifier** for labeling bouts. Often more accurate than Random Forest for complex patterns.
-
-**Key Parameters**:
-- `random_state`: Seed for reproducibility.
-
----
-
-### `KNearestBoutClassifier`
-
-Uses **K-Nearest Neighbors (KNN)** to classify bouts based on distance in feature space.
-
-**Key Parameters**:
-- `n_neighbors`: Number of neighbors to consider (default: 5).
-
----
-
-### `SVMBoutClassifier`
-
-Uses a **Support Vector Machine (SVM)** to classify bout features with a specified kernel.
-
-**Key Parameters**:
-- `kernel`: Kernel type (`"linear"`, `"rbf"`, etc.) (default: `"rbf"`).
-- `C`: Regularization parameter (default: `1.0`).
-
----
-
-### `MLPBoutClassifier`
-
-Uses a **Multi-Layer Perceptron (MLP)** neural network for clustering.
-
-**Key Parameters**:
-- `hidden_layer_sizes`: Shape of hidden layers (default: `(100,)`).
-- `max_iter`: Maximum training iterations (default: 300).
-
----
 
 ## Common Output Columns
+-   `cluster`: The final cluster assignment for each frame. A value of `-1` means the frame was unassigned (e.g., filtered out or marked as noise by HDBSCAN).
+-   `bout_id`: An integer ID identifying which bout a frame belongs to.
 
-- `cluster`: Cluster assignment per frame.  
-  `-1` means excluded or unassigned (e.g., filtered out).
-- `bout_id`: Integer ID for which bout the frame belongs to.
-
----
 
 ## Notes
+-   **Filtering**: Any column in your data ending with `_filter` will be used to exclude frames before bout creation.
+-   **Missing Values**: All missing values (NaNs) in numeric feature columns are converted to zero before processing.
+-   **Accessing Outputs**: You can access clustering results via `project.get_cluster_output()` or save them to CSV files with `project.save_clustering_output()`.
 
-- **Filtering**: Any column ending in `_filter` will be used to exclude frames.
-- **Missing Values**: All missing or NaNs are converted to zero before processing.
-- **Dimensionality Reduction** is crucial for clustering performance—choose UMAP for non-linear reduction, PCA for speed.
-- **Clustering Outputs** You can access clustering outputs though the `Project` function `project.get_cluster_output()` or save the cluster the outputs to csvs with `project.save_clustering_output()`
----
 
 ## Example Usage
 
+### Unsupervised: PCA + K-Means
 ```python
-strategy = PCAKMeansBoutStrategy(n_components=2, n_clusters=5, bout_length=15, stride=1)
-clustered_df = strategy.process(df)
+from your_module import UnsupervisedBoutPipeline, SKStandardScaler, SKPCA, SKKMeans
+
+# Define the pipeline
+pipeline = UnsupervisedBoutPipeline(
+    preprocessors=[SKStandardScaler(), SKPCA(n_components=2)],
+    clusterer=SKKMeans(n_clusters=5),
+    bout_length=15,
+    stride=1
+)
+
+# Run the pipeline on your project data
+pipeline.process(project)
