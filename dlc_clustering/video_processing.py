@@ -7,6 +7,8 @@ from typing import List, Optional, Tuple
 from dlc_clustering.projects import Project
 from tqdm import tqdm
 import numpy as np
+import cv2
+import imageio
 
 def open_video_captures(video_paths: List[str]) -> Tuple[List[cv2.VideoCapture], int, int, float]:
     caps = []
@@ -188,11 +190,118 @@ def render_videos(
         print(f"  Cluster {cid}: {Path(out_dir) / f'cluster_{cid}.mp4'}")
     print(f"  All clusters: {all_writer_path}  ({composite_w}x{composite_h} @ {fps}fps)")
 
+import polars as pl
+import polars.selectors as cs
+
+def render_best_fit_gifs(project: Project):
+    # This renders a gif per cluster showing the representative bout that is closest to the cluster mean trajectory.
+    # It assumes that the project has already been clustered and video data is available.
+    pose_sel = cs.ends_with("_x") | cs.ends_with("_y")
+    all_clean_parts: list[pl.DataFrame] = []
+
+    for vid_idx, video in enumerate(project.video_data):
+        for cam_index, (cam, df) in enumerate(zip(video["camera_order"], video["original_dlc_data"])):
+            clustering = video["clustering_output"].select(["cluster", "bout_id"])
+            df = df.select(pose_sel).with_row_index("idx")
+            clustering = clustering.with_row_index("idx")
+            merged = df.join(clustering, on="idx")
+            video_path = video["video_paths"][cam_index]
+            df_clean = (merged
+            .drop_nulls(subset=["cluster", "bout_id"])
+            .sort(["bout_id", "idx"])
+            .with_columns(
+            pl.cum_count("idx").over("bout_id").alias("frame_in_bout"),
+            pl.lit(cam).alias("camera"),
+            pl.lit(vid_idx).alias("video_idx"),
+            pl.lit(video_path).alias("video_path"),
+            )
+            )
+            all_clean_parts.append(df_clean)
+
+
+    all_clean = pl.concat(all_clean_parts, how="vertical_relaxed")
+    pose_cols = all_clean.select(cs.ends_with("_x") | cs.ends_with("_y")).columns
+
+    mean_per_cluster_frame = (
+    all_clean
+    .group_by(["cluster", "frame_in_bout"])
+    .agg([pl.col(c).mean().alias(c) for c in pose_cols])
+    .sort(["cluster", "frame_in_bout"])
+    )
+
+    need_rename = {c: f"{c}_mean" for c in mean_per_cluster_frame.columns
+    if c not in ("cluster", "frame_in_bout") and not c.endswith("_mean")}
+
+    if need_rename:
+        mean_df = mean_per_cluster_frame.rename(need_rename)
+    else:
+        mean_df = mean_per_cluster_frame
+
+
+    joined = all_clean.join(mean_df, on=["cluster", "frame_in_bout"], how="left")
+
+    diff_sq_exprs = [(pl.col(c) - pl.col(f"{c}_mean")) ** 2 for c in pose_cols]
+    joined = joined.with_columns(pl.sum_horizontal(*diff_sq_exprs).sqrt().alias("l2_dist"))
+
+
+
+    bout_scores = (joined.group_by(["cluster", "video_idx", "camera", "bout_id"])
+    .agg([
+    pl.col("l2_dist").mean().alias("bout_mean_l2"),
+    pl.col("l2_dist").sum().alias("bout_sum_l2"),
+    pl.len().alias("frames"),
+    pl.first("video_path").alias("video_path"),
+    pl.min("idx").alias("start_idx_in_bout"),
+    pl.max("idx").alias("end_idx_in_bout"),
+    ])
+
+    )
+
+    # pick representative bout per cluster (rank 1) and keep the added columns
+    rep_bout_per_cluster = (bout_scores.with_columns(pl.col("bout_mean_l2").rank("ordinal").over("cluster").alias("rank_in_cluster"))
+    .filter(pl.col("rank_in_cluster") == 1)
+    .select([
+    "cluster", "video_idx", "camera", "bout_id",
+    "frames", "bout_mean_l2", "bout_sum_l2",
+    "video_path", "start_idx_in_bout", "end_idx_in_bout"
+    ])
+    .sort("cluster")
+    )
+
+    for row in rep_bout_per_cluster.iter_rows(named=True):
+
+        video_dict = project.video_data[row["video_idx"]]
+        current_bout = row["bout_id"]
+        row_to_render = (video_dict["clustering_output"].filter(pl.col("bout_id").is_in([current_bout - 1, current_bout, current_bout + 1]))) # Hacky solution right now
+
+        video_path = row["video_path"]
+        frames_to_extract = list(row_to_render["row_idx"])
+        gif_path = project.output_path / "cluster_gifs" / f"cluster_{row['cluster']}.gif"
+        gif_path.parent.mkdir(parents=True, exist_ok=True)
+
+        cap = cv2.VideoCapture(video_path)
+        frames = []
+
+        for idx in frames_to_extract:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            ret, frame = cap.read()
+            if ret:
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) 
+                frames.append(frame)
+
+        cap.release()
+        imageio.mimsave(gif_path, frames, duration=0.5)
+        print(f"GIF saved to {gif_path}")
+
+        print(row) 
+
+
 def render_cluster_videos(project: Project):
     if not project.video_data:
         print("No video data available for rendering.")
         return
 
+    render_best_fit_gifs(project)
     for video in project.video_data:
         clustering_output = video["clustering_output"]
         video_paths = video.get("video_paths") or []
@@ -217,3 +326,4 @@ def render_cluster_videos(project: Project):
             layout_cols=layout_cols,
             label_each_pane=True,
         )
+
