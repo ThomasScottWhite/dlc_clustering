@@ -1,4 +1,5 @@
 import polars as pl
+import polars.selectors as cs
 from dataclasses import dataclass
 from typing import Protocol
 from typing import List
@@ -104,6 +105,48 @@ class VelocityStrategy:
 
         return df
     
+@dataclass
+class CentroidVelocityStrategy:
+    def process(self, df: pl.DataFrame) -> pl.DataFrame:
+        """
+        Returns a DataFrame containing only the velocity components
+        (x, y, z) and speed (Euclidean) for the body's centroid.
+        """
+
+        has_z = any(col.endswith("_z") for col in df.columns)
+
+        cvx = pl.mean_horizontal(cs.ends_with("_x")).diff()
+        cvy = pl.mean_horizontal(cs.ends_with("_y")).diff()
+
+        select_exprs = [
+            cvx.alias("centroid_velocity_x"),
+            cvy.alias("centroid_velocity_y"),
+        ]
+
+        if has_z:
+            cvz = pl.mean_horizontal(cs.ends_with("_z")).diff()
+            select_exprs.append(cvz.alias("centroid_velocity_z"))
+            
+            speed_expr = (
+                (cvx**2 + cvy**2 + cvz**2)
+                .sqrt()
+                .alias("centroid_speed")
+            )
+        else:
+            speed_expr = (
+                (cvx**2 + cvy**2)
+                .sqrt()
+                .alias("centroid_speed")
+            )
+            
+        select_exprs.append(speed_expr)
+
+        df = df.select(select_exprs)
+
+        df = df.fill_null(strategy="backward")
+        df = df.fill_null(strategy="forward")
+
+        return df
 
 @dataclass
 class VelocityFilterStrategy:

@@ -206,6 +206,7 @@ def render_best_fit_gifs(project: Project):
             clustering = clustering.with_row_index("idx")
             merged = df.join(clustering, on="idx")
             video_path = video["video_paths"][cam_index]
+
             df_clean = (merged
             .drop_nulls(subset=["cluster", "bout_id"])
             .sort(["bout_id", "idx"])
@@ -213,9 +214,7 @@ def render_best_fit_gifs(project: Project):
             pl.cum_count("idx").over("bout_id").alias("frame_in_bout"),
             pl.lit(cam).alias("camera"),
             pl.lit(vid_idx).alias("video_idx"),
-            pl.lit(video_path).alias("video_path"),
-            )
-            )
+            pl.lit(video_path).alias("video_path")))
             all_clean_parts.append(df_clean)
 
 
