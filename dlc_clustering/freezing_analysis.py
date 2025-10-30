@@ -463,7 +463,7 @@ def graph_heatmap_categorical_speed(project: Project, frames_per_bin: int = 100,
     plt.yticks(rotation=0)
     plt.tight_layout(rect=[0, 0, 0.88, 1])
 
-    output_path = Path(project.output_path) / "freezing_analysis" / "heatmap_mean_speed.png"
+    output_path = Path(project.output_path) / "freezing_analysis" / "heatmap_categorical_speed.png"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path)
     plt.close()
