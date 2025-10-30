@@ -24,6 +24,7 @@ class VideoData2D(TypedDict):
     clustering_output: pl.DataFrame | None  
     supervised_labels: pl.DataFrame | None
     camera_order: List[str] | None
+    group: List[str] | None
     
 class VideoData3D(TypedDict):
     video_paths: List[str]

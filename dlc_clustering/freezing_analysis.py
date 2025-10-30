@@ -9,6 +9,7 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 from pathlib import Path
 from matplotlib.patches import Patch
+import copy
 
 def process_data(project: Project, strategies: list) -> None:
     project_data = project.video_data
@@ -475,3 +476,15 @@ def graph_all_freezing_analysis(project: Project, frames_per_bin: int = 100):
     graph_binned_log_mean_speed(project, frames_per_bin=frames_per_bin)
     graph_heatmap_mean_speed(project, frames_per_bin=frames_per_bin)
     graph_heatmap_categorical_speed(project, frames_per_bin=frames_per_bin, percentile=(10, 50))
+
+    for group in project.groups:
+        group_project = copy.deepcopy(project)
+        group_project.output_path = project.output_path / "groups" / group
+        group_project.video_data = [
+            video for video in project.video_data if group in video["group"]
+        ]
+        graph_total_speed(group_project)
+        graph_log_total_speed_fixed(group_project)
+        graph_binned_log_mean_speed(group_project, frames_per_bin=frames_per_bin)
+        graph_heatmap_mean_speed(group_project, frames_per_bin=frames_per_bin)
+        graph_heatmap_categorical_speed(group_project, frames_per_bin=frames_per_bin, percentile=(10, 50))

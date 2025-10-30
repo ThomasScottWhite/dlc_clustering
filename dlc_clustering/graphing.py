@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 import polars as pl
 import numpy as np
+import copy
 
 def graph_combined_cluster_counts(project: Project):
     combined_df: pl.DataFrame = project.get_cluster_output()
@@ -236,3 +237,16 @@ def graph_all(project: Project):
     graph_video_cluster_specific_velocity(project)
     graph_video_specific_velocity(project)
     plot_cluster_heatmap(project)
+
+    for group in project.groups:
+        group_project = copy.deepcopy(project)
+        group_project.output_path = project.output_path / "groups" / group
+        group_project.video_data = [
+            video for video in project.video_data if group in video["group"]
+        ]
+        graph_combined_cluster_counts(group_project)
+        graph_video_cluster_counts(group_project)
+        graph_cluster_specific_velocity(group_project)
+        graph_video_cluster_specific_velocity(group_project)
+        graph_video_specific_velocity(group_project)
+        plot_cluster_heatmap(group_project)

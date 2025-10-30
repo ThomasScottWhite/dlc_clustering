@@ -176,6 +176,7 @@ def populate_video_data(project_path: str, merge_cameras: bool = True) -> Tuple[
             clustering_output=[],
             supervised_labels=label_df,
             camera_order=camera_order,
+            group=[],
         ))
 
     return video_data, behavior_to_id
@@ -206,6 +207,7 @@ class Project:
         self.clustering_strategy = clustering_strategy
         self.data_processing_strategies = data_processing_strategies
         self.merge_cameras = merge_cameras
+        self.groups: set = set()
 
         self.video_data, self.behaviour_to_id = populate_video_data(project_path, merge_cameras=merge_cameras)
 
@@ -333,3 +335,9 @@ class Project:
         for unique_video_name in combined_df["video_name"].unique().to_list():
             video_df = combined_df.filter(pl.col("video_name") == unique_video_name)
             video_df.write_csv(self.output_path / "csvs" / f"{unique_video_name}_clustering_output.csv")
+
+    def group_videos(self, group_title, video_name_regex):
+        self.groups.add(group_title)
+        for video in self.video_data:
+            if video_name_regex in video["video_name"]:
+                video["group"].append(group_title)
