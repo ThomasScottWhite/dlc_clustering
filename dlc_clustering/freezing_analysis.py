@@ -1,16 +1,18 @@
 from dlc_clustering.projects import Project
-from dlc_clustering.data_processing import VelocityStrategy, ConfidenceFilterStrategy
+from dlc_clustering.data_processing import CentroidVelocityStrategy, ConfidenceFilterStrategy
 import matplotlib.pyplot as plt
 import polars as pl
+import pandas as pd
 import numpy as np
 import polars.selectors as cs
 import seaborn as sns
 import matplotlib.pyplot as plt
+from pathlib import Path
+from matplotlib.patches import Patch
 
 def process_data(project: Project, strategies: list) -> None:
     project_data = project.video_data
     """Process each camera's DLC DataFrame with all strategies."""
-    video_combined_dfs = []
     for video in project_data:
         video["processed_dlc_data"] = []
         video["processed_dlc_data_components"] = [] 
@@ -51,11 +53,10 @@ def process_data(project: Project, strategies: list) -> None:
 
     return project.video_data
 
-def collect_data(project : Project):
-
+def collect_freezing_data(project: Project) -> pl.DataFrame:
     project_video_data = process_data(project, [
         ConfidenceFilterStrategy(),
-        VelocityStrategy(),
+        CentroidVelocityStrategy(),
     ])
     dfs = []
     for video in project_video_data:
@@ -72,9 +73,8 @@ def collect_data(project : Project):
     return collected_data
 
 
-
 def graph_total_speed(project: Project):
-    collected_data = collect_data(project)
+    collected_data = collect_freezing_data(project)
     
     collected_data_log = collected_data.with_columns(
         log_total_speed = (pl.col("total_speed"))
@@ -85,27 +85,29 @@ def graph_total_speed(project: Project):
     plt.xlabel("Total Speed (units)", fontsize=12)
     plt.ylabel("Frequency (Count)", fontsize=12)
     plt.grid(axis='y', linestyle='--', alpha=0.7)
-    plt.show()
+    output_path = Path(project.project_path) / "freezing_analysis" / "total_speed_distribution.png"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path)
 
 
 
-def graph_log_total_speed(project: Project):
-    collected_data = collect_data(project)
+# def graph_log_total_speed(project: Project):
+#     collected_data = collect_freezing_data(project)
 
-    collected_data_log = collected_data.with_columns(
-        log_total_speed = (pl.col("total_speed") + 1).log()
-    )
-    plt.figure(figsize=(10, 6))
-    plt.hist(collected_data_log["log_total_speed"], bins=30, edgecolor='black', alpha=0.7)
-    plt.title("Distribution of Log Total Speed", fontsize=16)
-    plt.xlabel("Log Total Speed (units)", fontsize=12)
-    plt.ylabel("Frequency (Count)", fontsize=12)
-    plt.grid(axis='y', linestyle='--', alpha=0.7)
-    plt.show()
+#     collected_data_log = collected_data.with_columns(
+#         log_total_speed = (pl.col("total_speed") + 1).log()
+#     )
+#     plt.figure(figsize=(10, 6))
+#     plt.hist(collected_data_log["log_total_speed"], bins=30, edgecolor='black', alpha=0.7)
+#     plt.title("Distribution of Log Total Speed", fontsize=16)
+#     plt.xlabel("Log Total Speed (units)", fontsize=12)
+#     plt.ylabel("Frequency (Count)", fontsize=12)
+#     plt.grid(axis='y', linestyle='--', alpha=0.7)
+#     plt.show()
 
 
 def graph_log_total_speed_fixed(project: Project):
-    collected_data = collect_data(project)
+    collected_data = collect_freezing_data(project)
     collected_data_log = collected_data.with_columns(
         log_total_speed = (pl.col("total_speed") + 1).log()
     )
@@ -121,12 +123,15 @@ def graph_log_total_speed_fixed(project: Project):
     plt.xlabel("Total Speed (on a Log(x+1) Scale)", fontsize=12)
     plt.ylabel("Frequency (Count)", fontsize=12)
     plt.grid(axis='y', linestyle='--', alpha=0.7)
-    plt.show()
+    output_path = Path(project.project_path) / "freezing_analysis" / "log_total_speed_distribution.png"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path)
+
 
 
 
 def graph_binned_log_mean_speed(project: Project, frames_per_bin: int = 100):
-    collected_data = collect_data(project)
+    collected_data = collect_freezing_data(project)
     df_indexed = collected_data.sort(["video_name"]).with_columns(
         frame_index = pl.int_range(0, pl.len()).over("video_name")
     )
@@ -172,61 +177,183 @@ def graph_binned_log_mean_speed(project: Project, frames_per_bin: int = 100):
     plt.xlabel("Mean Speed (on a Log(x+1) Scale, labels at bin centers)", fontsize=12)
     plt.ylabel("Frequency (Count of Bins)", fontsize=12)
     plt.grid(axis='y', linestyle='--', alpha=0.7)
-    plt.show()
+    output_path = Path(project.project_path) / "freezing_analysis" / "binned_log_mean_speed.png"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path)
+
 
 def graph_heatmap_mean_speed(project: Project, frames_per_bin: int = 100):
-    collected_data = collect_data(project)
+    collected_data = collect_freezing_data(project)
+
+    frames_per_bin = 500
+
+
+    FLAG_COLORS = {
+        "VoidTiming_flag": "red",
+        "ToneOffsetframe_flag": "blue",
+        "ToneONsetframe_flag": "green",
+        "ShockONsetframe_flag": "orange",
+        "ShockOffsetframe_flag": "purple",
+    }
+
+    all_flag_cols = [col for col in collected_data.columns if col.endswith("_flag")]
+
+    default_colors = ['magenta', 'cyan', 'yellow', 'brown', 'black', 'grey'] # Fallback colors
+    color_idx = 0
+    for flag_col in all_flag_cols:
+        if flag_col not in FLAG_COLORS:
+            if color_idx < len(default_colors):
+                FLAG_COLORS[flag_col] = default_colors[color_idx]
+                color_idx += 1
+            else:
+                FLAG_COLORS[flag_col] = 'black' # Default if all fallback colors are used
+
+    print(f"Using flag colors: {FLAG_COLORS}")
+
+
     df_indexed = collected_data.sort(["video_name"]).with_columns(
         frame_index = pl.int_range(0, pl.len()).over("video_name")
     )
-
     df_binned = df_indexed.with_columns(
         frame_bin = (pl.col("frame_index") // frames_per_bin) * frames_per_bin
     )
+    flag_aggregations = [pl.col(col).max().alias(f"max_{col}") for col in all_flag_cols]
 
     df_grouped = df_binned.group_by(["video_name", "frame_bin"]).agg(
-        pl.col("total_speed").mean().alias("mean_speed")
+        pl.col("total_speed").mean().alias("mean_speed"),
+        *flag_aggregations 
     )
+
 
     df_pivot_binned = df_grouped.pivot(
         index="video_name",
         columns="frame_bin",
         values="mean_speed"
     ).sort("video_name")
-
     df_pivot_binned_pd = df_pivot_binned.to_pandas().set_index("video_name")
-
     df_pivot_binned_pd.columns = df_pivot_binned_pd.columns.astype(int)
-    df_pivot_binned_pd = df_pivot_binned_pd.sort_index(axis=1) 
+    df_pivot_binned_pd = df_pivot_binned_pd.sort_index(axis=1)
 
-    plt.figure(figsize=(20, 8))
-    sns.heatmap(
+
+    df_pivot_flags_pd_dict = {}
+    for flag_col in all_flag_cols:
+        df_pivot_flag = df_grouped.pivot(
+            index="video_name",
+            columns="frame_bin",
+            values=f"max_{flag_col}"
+        ).sort("video_name")
+        
+        df_pivot_flag_pd = df_pivot_flag.to_pandas().set_index("video_name")
+        df_pivot_flag_pd.columns = df_pivot_flag_pd.columns.astype(int)
+        df_pivot_flag_pd = df_pivot_flag_pd.sort_index(axis=1)
+        df_pivot_flag_pd = df_pivot_flag_pd.reindex_like(df_pivot_binned_pd).fillna(0).astype(int)
+        
+        df_pivot_flags_pd_dict[flag_col] = df_pivot_flag_pd
+
+    plt.figure(figsize=(20, 10)) 
+    ax = sns.heatmap(
         df_pivot_binned_pd,
         mask=df_pivot_binned_pd.isnull(),
         cmap="viridis",
         cbar_kws={'label': 'Mean Total Speed'},
-        xticklabels=4 
+        xticklabels=4,
     )
-    plt.title(f"Heatmap of Mean Speed (Binned every {frames_per_bin} frames)", fontsize=16)
+
+    y_labels = df_pivot_binned_pd.index
+    x_labels = df_pivot_binned_pd.columns
+
+    for flag_col, flag_df_pd in df_pivot_flags_pd_dict.items():
+        for i, video_name in enumerate(y_labels):
+            for j, frame_bin in enumerate(x_labels):
+                if not np.isnan(flag_df_pd.loc[video_name, frame_bin]) and flag_df_pd.loc[video_name, frame_bin] == 1:
+                    ax.text(
+                        j + 0.5,
+                        i + 0.5,
+                        'x',
+                        color=FLAG_COLORS[flag_col],
+                        ha='center', va='center',
+                        fontsize=24,
+                        fontweight='bold'
+                    )
+
+    legend_handles = []
+    for flag_col, color in FLAG_COLORS.items():
+        if flag_col in all_flag_cols:
+            legend_handles.append(Patch(color=color, label=flag_col.replace("_flag", ""))) # Customize label if desired
+
+    ax.legend(handles=legend_handles, title="Active Flags", bbox_to_anchor=(1.15, 1), loc='upper left', borderaxespad=0.)
+
+
+    plt.title(f"Heatmap of Mean Speed with Active Flags (Binned every {frames_per_bin} frames)", fontsize=16)
     plt.xlabel(f"Frame Bin (Start Frame #)", fontsize=12)
     plt.ylabel("Video Name", fontsize=12)
     plt.yticks(rotation=0)
-    plt.tight_layout()
-    plt.show()
+    plt.tight_layout(rect=[0, 0, 0.88, 1])
 
-def graph_heatmap_categorical_speed(project: Project, frames_per_bin: int = 100, low_threshold: float = 3.0, high_threshold: float = 6.2):
-    collected_data = collect_data(project)
+    output_path = Path(project.project_path) / "freezing_analysis" / "heatmap_mean_speed.png"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path)
+
+
+def graph_heatmap_categorical_speed(project: Project, frames_per_bin: int = 100, percentile=None, thresholds=None):
+    # An example function call for percentile-based thresholds:
+    # graph_heatmap_categorical_speed(project, frames_per_bin=100, percentile=(25, 75))
+
+    # An example function call for fixed thresholds:
+    # graph_heatmap_categorical_speed(project, frames_per_bin=100, thresholds=(3.0, 6.2))
+
+    if thresholds is not None:
+        low_threshold, high_threshold = thresholds
+    elif percentile is not None:
+        collected_data = collect_freezing_data(project)
+        speed_values = collected_data["total_speed"].to_numpy()
+        low_threshold = np.percentile(speed_values, percentile[0])
+        high_threshold = np.percentile(speed_values, percentile[1])
+    else:
+        low_threshold = 3.0
+        high_threshold = 6.2
+
+    collected_data = collect_freezing_data(project)
+
+    frames_per_bin = 500
+
+
+    FLAG_COLORS = {
+        "VoidTiming_flag": "red",
+        "ToneOffsetframe_flag": "blue",
+        "ToneONsetframe_flag": "green",
+        "ShockONsetframe_flag": "orange",
+        "ShockOffsetframe_flag": "purple",
+    }
+
+    all_flag_cols = [col for col in collected_data.columns if col.endswith("_flag")]
+
+    default_colors = ['magenta', 'cyan', 'yellow', 'brown', 'black', 'grey'] # Fallback colors
+    color_idx = 0
+    for flag_col in all_flag_cols:
+        if flag_col not in FLAG_COLORS:
+            if color_idx < len(default_colors):
+                FLAG_COLORS[flag_col] = default_colors[color_idx]
+                color_idx += 1
+            else:
+                FLAG_COLORS[flag_col] = 'black' # Default if all fallback colors are used
+
+    print(f"Using flag colors: {FLAG_COLORS}")
+
+
     df_indexed = collected_data.sort(["video_name"]).with_columns(
         frame_index = pl.int_range(0, pl.len()).over("video_name")
     )
-
     df_binned = df_indexed.with_columns(
         frame_bin = (pl.col("frame_index") // frames_per_bin) * frames_per_bin
     )
+    flag_aggregations = [pl.col(col).max().alias(f"max_{col}") for col in all_flag_cols]
 
     df_grouped = df_binned.group_by(["video_name", "frame_bin"]).agg(
-        pl.col("total_speed").mean().alias("mean_speed")
+        pl.col("total_speed").mean().alias("mean_speed"),
+        *flag_aggregations 
     )
+
 
     df_pivot_binned = df_grouped.pivot(
         index="video_name",
@@ -234,12 +361,27 @@ def graph_heatmap_categorical_speed(project: Project, frames_per_bin: int = 100,
         values="mean_speed"
     ).sort("video_name")
 
+
     df_pivot_binned_pd = df_pivot_binned.to_pandas().set_index("video_name")
-
     df_pivot_binned_pd.columns = df_pivot_binned_pd.columns.astype(int)
-    df_pivot_binned_pd = df_pivot_binned_pd.sort_index(axis=1) 
+    df_pivot_binned_pd = df_pivot_binned_pd.sort_index(axis=1)
 
-    # This function converts a speed value into a category number
+
+    df_pivot_flags_pd_dict = {}
+    for flag_col in all_flag_cols:
+        df_pivot_flag = df_grouped.pivot(
+            index="video_name",
+            columns="frame_bin",
+            values=f"max_{flag_col}"
+        ).sort("video_name")
+        
+        df_pivot_flag_pd = df_pivot_flag.to_pandas().set_index("video_name")
+        df_pivot_flag_pd.columns = df_pivot_flag_pd.columns.astype(int)
+        df_pivot_flag_pd = df_pivot_flag_pd.sort_index(axis=1)
+        df_pivot_flag_pd = df_pivot_flag_pd.reindex_like(df_pivot_binned_pd).fillna(0).astype(int)
+        
+        df_pivot_flags_pd_dict[flag_col] = df_pivot_flag_pd
+        
     def classify_speed_numeric(speed_val):
         if pd.isna(speed_val):
             return np.nan  # Keep missing values as-is
@@ -254,7 +396,7 @@ def graph_heatmap_categorical_speed(project: Project, frames_per_bin: int = 100,
     df_categorical_numeric = df_pivot_binned_pd.map(classify_speed_numeric)
     categorical_cmap = ["#4c72b0", "#f5964f", "#c44e52"]
 
-    plt.figure(figsize=(20, 8))
+    plt.figure(figsize=(20, 10)) 
 
     ax = sns.heatmap(
         df_categorical_numeric, 
@@ -269,12 +411,40 @@ def graph_heatmap_categorical_speed(project: Project, frames_per_bin: int = 100,
         xticklabels=4 
     )
 
-    cbar = ax.collections[0].colorbar
-    cbar.set_ticklabels(['Low', 'Middle', 'High'])
+    y_labels = df_pivot_binned_pd.index
+    x_labels = df_pivot_binned_pd.columns
 
-    plt.title(f"Heatmap of Speed Category (Binned every {frames_per_bin} frames)", fontsize=16)
+    for flag_col, flag_df_pd in df_pivot_flags_pd_dict.items():
+        for i, video_name in enumerate(y_labels):
+            for j, frame_bin in enumerate(x_labels):
+                if not np.isnan(flag_df_pd.loc[video_name, frame_bin]) and flag_df_pd.loc[video_name, frame_bin] == 1:
+                    ax.text(
+                        j + 0.5,
+                        i + 0.5,
+                        'x',
+                        color=FLAG_COLORS[flag_col],
+                        ha='center', va='center',
+                        fontsize=24,
+                        fontweight='bold'
+                    )
+
+    legend_handles = []
+    for flag_col, color in FLAG_COLORS.items():
+        if flag_col in all_flag_cols:
+            legend_handles.append(Patch(color=color, label=flag_col.replace("_flag", ""))) # Customize label if desired
+
+    ax.legend(handles=legend_handles, title="Active Flags", bbox_to_anchor=(1.15, 1), loc='upper left', borderaxespad=0.)
+
+
+    plt.title(f"Heatmap of Mean Speed with Active Flags (Binned every {frames_per_bin} frames)", fontsize=16)
     plt.xlabel(f"Frame Bin (Start Frame #)", fontsize=12)
     plt.ylabel("Video Name", fontsize=12)
     plt.yticks(rotation=0)
-    plt.tight_layout()
-    plt.show()
+    plt.tight_layout(rect=[0, 0, 0.88, 1])
+
+    output_path = Path(project.output_path) / "freezing_analysis" / "heatmap_mean_speed.png"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path)
+    plt.close()
+
+
