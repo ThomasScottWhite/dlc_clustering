@@ -62,16 +62,37 @@ def collect_freezing_data(project: Project) -> pl.DataFrame:
     for video in project_video_data:
         combined_data = video["combined_data"]
         video_name = video["video_name"]
+        time_series_data = video["time_series_data"]
+
         combined_data = combined_data.with_columns(
             total_speed = pl.sum_horizontal(cs.ends_with("_speed")),
             total_confidence = pl.sum_horizontal(cs.ends_with("confidence_filter")),
             video_name = pl.lit(video_name)
         )
+        # Combine with time series data
+        time_series_data = time_series_data.with_row_index("frame_index")
+        combined_data = combined_data.with_row_index("frame_index")
+        combined_data = combined_data.join(time_series_data, on="frame_index")
         dfs.append(combined_data)
 
-    collected_data = pl.concat(dfs, how="vertical")
-    return collected_data
+    columns_set = set()
+    for df in dfs:
+        columns_set.update(df.columns)
 
+    ordered_columns = sorted(list(columns_set))
+    aligned_dfs = []
+
+    for df in dfs:
+        current_cols = df.columns
+        cols_to_add = [
+            pl.lit(0).alias(col) for col in ordered_columns if col not in current_cols
+        ]
+        aligned_df = df.with_columns(cols_to_add).select(ordered_columns)
+        aligned_dfs.append(aligned_df)
+
+    collected_data = pl.concat(aligned_dfs, how="vertical")
+
+    return collected_data
 
 def graph_total_speed(project: Project):
     collected_data = collect_freezing_data(project)
@@ -85,10 +106,10 @@ def graph_total_speed(project: Project):
     plt.xlabel("Total Speed (units)", fontsize=12)
     plt.ylabel("Frequency (Count)", fontsize=12)
     plt.grid(axis='y', linestyle='--', alpha=0.7)
-    output_path = Path(project.project_path) / "freezing_analysis" / "total_speed_distribution.png"
+    output_path = Path(project.output_path) / "freezing_analysis" / "total_speed_distribution.png"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path)
-
+    plt.close()
 
 
 # def graph_log_total_speed(project: Project):
@@ -123,10 +144,10 @@ def graph_log_total_speed_fixed(project: Project):
     plt.xlabel("Total Speed (on a Log(x+1) Scale)", fontsize=12)
     plt.ylabel("Frequency (Count)", fontsize=12)
     plt.grid(axis='y', linestyle='--', alpha=0.7)
-    output_path = Path(project.project_path) / "freezing_analysis" / "log_total_speed_distribution.png"
+    output_path = Path(project.output_path) / "freezing_analysis" / "log_total_speed_distribution.png"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path)
-
+    plt.close()
 
 
 
@@ -177,10 +198,10 @@ def graph_binned_log_mean_speed(project: Project, frames_per_bin: int = 100):
     plt.xlabel("Mean Speed (on a Log(x+1) Scale, labels at bin centers)", fontsize=12)
     plt.ylabel("Frequency (Count of Bins)", fontsize=12)
     plt.grid(axis='y', linestyle='--', alpha=0.7)
-    output_path = Path(project.project_path) / "freezing_analysis" / "binned_log_mean_speed.png"
+    output_path = Path(project.output_path) / "freezing_analysis" / "binned_log_mean_speed.png"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path)
-
+    plt.close()
 
 def graph_heatmap_mean_speed(project: Project, frames_per_bin: int = 100):
     collected_data = collect_freezing_data(project)
@@ -290,10 +311,10 @@ def graph_heatmap_mean_speed(project: Project, frames_per_bin: int = 100):
     plt.yticks(rotation=0)
     plt.tight_layout(rect=[0, 0, 0.88, 1])
 
-    output_path = Path(project.project_path) / "freezing_analysis" / "heatmap_mean_speed.png"
+    output_path = Path(project.output_path) / "freezing_analysis" / "heatmap_mean_speed.png"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path)
-
+    plt.close()
 
 def graph_heatmap_categorical_speed(project: Project, frames_per_bin: int = 100, percentile=None, thresholds=None):
     # An example function call for percentile-based thresholds:
@@ -448,3 +469,9 @@ def graph_heatmap_categorical_speed(project: Project, frames_per_bin: int = 100,
     plt.close()
 
 
+def graph_all_freezing_analysis(project: Project, frames_per_bin: int = 100):
+    graph_total_speed(project)
+    graph_log_total_speed_fixed(project)
+    graph_binned_log_mean_speed(project, frames_per_bin=frames_per_bin)
+    graph_heatmap_mean_speed(project, frames_per_bin=frames_per_bin)
+    graph_heatmap_categorical_speed(project, frames_per_bin=frames_per_bin, percentile=(10, 50))
