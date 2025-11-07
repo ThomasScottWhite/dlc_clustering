@@ -360,8 +360,6 @@ def graph_heatmap_categorical_speed(project: Project, frames_per_bin: int = 100,
             else:
                 FLAG_COLORS[flag_col] = 'black' # Default if all fallback colors are used
 
-    print(f"Using flag colors: {FLAG_COLORS}")
-
 
     df_indexed = collected_data.sort(["video_name"]).with_columns(
         frame_index = pl.int_range(0, pl.len()).over("video_name")
