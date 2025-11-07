@@ -470,12 +470,17 @@ def graph_heatmap_categorical_speed(project: Project, frames_per_bin: int = 100,
     plt.close()
 
 
-def graph_all_freezing_analysis(project: Project, frames_per_bin: int = 100):
+def graph_all_freezing_analysis(project: Project, frames_per_bin: int = 100, percentile = None, thresholds=None):
+    if percentile is None and thresholds is None:
+        percentile = (25, 75)
+        thresholds = None
+        print(f"No thresholds or percentiles provided. Using default percentiles: {percentile}")
+
     graph_total_speed(project)
     graph_log_total_speed_fixed(project)
     graph_binned_log_mean_speed(project, frames_per_bin=frames_per_bin)
     graph_heatmap_mean_speed(project, frames_per_bin=frames_per_bin)
-    graph_heatmap_categorical_speed(project, frames_per_bin=frames_per_bin, percentile=(10, 50))
+    graph_heatmap_categorical_speed(project, frames_per_bin=frames_per_bin, percentile=percentile, thresholds=thresholds)
 
     for group in project.groups:
         group_project = copy.deepcopy(project)
@@ -487,4 +492,4 @@ def graph_all_freezing_analysis(project: Project, frames_per_bin: int = 100):
         graph_log_total_speed_fixed(group_project)
         graph_binned_log_mean_speed(group_project, frames_per_bin=frames_per_bin)
         graph_heatmap_mean_speed(group_project, frames_per_bin=frames_per_bin)
-        graph_heatmap_categorical_speed(group_project, frames_per_bin=frames_per_bin, percentile=(10, 50))
+        graph_heatmap_categorical_speed(group_project, frames_per_bin=frames_per_bin, percentile=percentile, thresholds=thresholds)
