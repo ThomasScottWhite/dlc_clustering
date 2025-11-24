@@ -207,33 +207,14 @@ def graph_binned_log_mean_speed(project: Project, frames_per_bin: int = 100):
 def graph_heatmap_mean_speed(project: Project, frames_per_bin: int = 100):
     collected_data = collect_freezing_data(project)
 
-    frames_per_bin = 500
+    frames_per_bin = 500 
 
+    all_flag_cols = sorted([col for col in collected_data.columns if col.endswith("_flag")])
+    
+    palette = sns.color_palette("tab10", len(all_flag_cols))
+    flag_colors_map = dict(zip(all_flag_cols, palette))
 
-    FLAG_COLORS = {
-        "VoidTiming_flag": "red",
-        "ToneOffsetframe_flag": "blue",
-        "ToneONsetframe_flag": "green",
-        "ShockONsetframe_flag": "orange",
-        "ShockOffsetframe_flag": "purple",
-    }
-
-    all_flag_cols = [col for col in collected_data.columns if col.endswith("_flag")]
-
-    default_colors = ['magenta', 'cyan', 'yellow', 'brown', 'black', 'grey'] # Fallback colors
-    color_idx = 0
-    for flag_col in all_flag_cols:
-        if flag_col not in FLAG_COLORS:
-            if color_idx < len(default_colors):
-                FLAG_COLORS[flag_col] = default_colors[color_idx]
-                color_idx += 1
-            else:
-                FLAG_COLORS[flag_col] = 'black' # Default if all fallback colors are used
-
-    print(f"Using flag colors: {FLAG_COLORS}")
-
-
-    df_indexed = collected_data.sort(["video_name"]).with_columns(
+    df_indexed = collected_data.sort("video_name").with_columns(
         frame_index = pl.int_range(0, pl.len()).over("video_name")
     )
     df_binned = df_indexed.with_columns(
@@ -246,16 +227,15 @@ def graph_heatmap_mean_speed(project: Project, frames_per_bin: int = 100):
         *flag_aggregations 
     )
 
-
     df_pivot_binned = df_grouped.pivot(
         index="video_name",
         columns="frame_bin",
         values="mean_speed"
     ).sort("video_name")
+    
     df_pivot_binned_pd = df_pivot_binned.to_pandas().set_index("video_name")
     df_pivot_binned_pd.columns = df_pivot_binned_pd.columns.astype(int)
     df_pivot_binned_pd = df_pivot_binned_pd.sort_index(axis=1)
-
 
     df_pivot_flags_pd_dict = {}
     for flag_col in all_flag_cols:
@@ -284,29 +264,42 @@ def graph_heatmap_mean_speed(project: Project, frames_per_bin: int = 100):
     y_labels = df_pivot_binned_pd.index
     x_labels = df_pivot_binned_pd.columns
 
-    for flag_col, flag_df_pd in df_pivot_flags_pd_dict.items():
+    # This is to offset the flag markers so they don't overlap
+    num_flags = len(all_flag_cols)
+    offsets = np.linspace(-0.25, 0.25, num_flags) 
+
+    for idx, (flag_col, flag_df_pd) in enumerate(df_pivot_flags_pd_dict.items()):
+        current_color = flag_colors_map[flag_col]
+        current_offset = offsets[idx] 
+        
         for i, video_name in enumerate(y_labels):
             for j, frame_bin in enumerate(x_labels):
-                if not np.isnan(flag_df_pd.loc[video_name, frame_bin]) and flag_df_pd.loc[video_name, frame_bin] == 1:
+                val = flag_df_pd.loc[video_name, frame_bin]
+                if not np.isnan(val) and val == 1:
                     ax.text(
-                        j + 0.5,
-                        i + 0.5,
+                        j + 0.5 + current_offset,
+                        i + 0.5, 
                         'x',
-                        color=FLAG_COLORS[flag_col],
+                        color=current_color,
                         ha='center', va='center',
-                        fontsize=24,
+                        fontsize=20,
                         fontweight='bold'
                     )
 
     legend_handles = []
-    for flag_col, color in FLAG_COLORS.items():
-        if flag_col in all_flag_cols:
-            legend_handles.append(Patch(color=color, label=flag_col.replace("_flag", ""))) # Customize label if desired
+    for flag_col, color in flag_colors_map.items():
+        label_text = flag_col.replace("_flag", "")
+        legend_handles.append(Patch(color=color, label=label_text))
 
-    ax.legend(handles=legend_handles, title="Active Flags", bbox_to_anchor=(1.15, 1), loc='upper left', borderaxespad=0.)
+    ax.legend(
+        handles=legend_handles, 
+        title="Active Flags", 
+        bbox_to_anchor=(1.15, 1), 
+        loc='upper left', 
+        borderaxespad=0.
+    )
 
-
-    plt.title(f"Heatmap of Mean Speed with Active Flags (Binned every {frames_per_bin} frames)", fontsize=16)
+    plt.title(f"Heatmap of Mean Speed (Binned {frames_per_bin} frames)", fontsize=16)
     plt.xlabel(f"Frame Bin (Start Frame #)", fontsize=12)
     plt.ylabel("Video Name", fontsize=12)
     plt.yticks(rotation=0)
