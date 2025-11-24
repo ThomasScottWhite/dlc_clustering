@@ -158,8 +158,6 @@ def graph_binned_log_mean_speed(project: Project, frames_per_bin: int = 100):
         frame_index = pl.int_range(0, pl.len()).over("video_name")
     )
 
-    frames_per_bin = 100 
-
     df_binned = df_indexed.with_columns(
         frame_bin = (pl.col("frame_index") // frames_per_bin) * frames_per_bin
     )
@@ -206,8 +204,6 @@ def graph_binned_log_mean_speed(project: Project, frames_per_bin: int = 100):
 
 def graph_heatmap_mean_speed(project: Project, frames_per_bin: int = 100):
     collected_data = collect_freezing_data(project)
-
-    frames_per_bin = 500 
 
     all_flag_cols = sorted([col for col in collected_data.columns if col.endswith("_flag")])
     
@@ -329,9 +325,6 @@ def graph_heatmap_categorical_speed(project: Project, frames_per_bin: int = 100,
         high_threshold = 6.2
 
     collected_data = collect_freezing_data(project)
-
-    frames_per_bin = 500
-
 
     FLAG_COLORS = {
         "VoidTiming_flag": "red",
